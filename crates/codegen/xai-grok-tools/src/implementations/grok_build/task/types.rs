@@ -36,6 +36,41 @@ pub enum SubagentOwner {
     },
 }
 
+/// Session-level policy applied to model-spawned subagents.
+///
+/// The default preserves Grok Build's existing behavior. Agent profiles can
+/// opt into context inheritance, bounded fan-out, and synchronous admission
+/// acknowledgement without changing provider/model request semantics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentExecutionPolicy {
+    /// Seed a new child with the normalized parent conversation by default.
+    #[serde(default)]
+    pub fork_context: bool,
+    /// Hard maximum of pending + active interactive children for one parent
+    /// session. `None` preserves the unbounded legacy behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active_subagents: Option<usize>,
+    /// For native background spawns, wait until the coordinator has atomically
+    /// admitted or rejected the child before telling the model it started.
+    #[serde(default)]
+    pub acknowledge_background_admission: bool,
+}
+
+impl SubagentExecutionPolicy {
+    pub const fn ultra() -> Self {
+        Self {
+            fork_context: true,
+            max_active_subagents: Some(3),
+            acknowledge_background_admission: true,
+        }
+    }
+
+    pub fn is_default(self) -> bool {
+        self == Self::default()
+    }
+}
+
 impl SubagentOwner {
     pub fn workflow(run_id: impl Into<String>) -> Self {
         Self::Workflow {
@@ -96,6 +131,10 @@ pub struct SubagentRequest {
     /// Harness-only: seed child with normalized parent conversation, then append
     /// `prompt`. Not on TaskToolInput. Successful `resume_from` takes precedence.
     pub fork_context: bool,
+    /// Session policy captured when this spawn was created. The coordinator
+    /// uses it for atomic admission; child runtimes use the explicit
+    /// `fork_context` field above.
+    pub execution_policy: SubagentExecutionPolicy,
     pub owner: SubagentOwner,
     pub cancel_token: CancellationToken,
 }
@@ -107,6 +146,22 @@ pub struct SubagentSpawnRequest {
     pub request: Box<SubagentRequest>,
     #[educe(Debug(ignore))]
     pub result_tx: oneshot::Sender<SubagentResult>,
+    /// Optional one-shot admission channel used by background callers that
+    /// must not report a child as started before the coordinator accepts it.
+    #[educe(Debug(ignore))]
+    pub admission_tx: Option<oneshot::Sender<SubagentAdmissionOutcome>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentAdmission {
+    pub subagent_id: String,
+    pub child_session_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum SubagentAdmissionOutcome {
+    Admitted(SubagentAdmission),
+    Rejected(SubagentResult),
 }
 
 impl std::ops::Deref for SubagentSpawnRequest {
@@ -127,6 +182,17 @@ impl SubagentSpawnRequest {
         build: impl FnOnce(&SubagentRequest) -> SubagentResult,
     ) -> Result<(), SubagentResult> {
         let result = build(&self.request);
+        if let Some(admission_tx) = self.admission_tx {
+            let outcome = if result.success {
+                SubagentAdmissionOutcome::Admitted(SubagentAdmission {
+                    subagent_id: self.request.id.clone(),
+                    child_session_id: result.child_session_id.clone(),
+                })
+            } else {
+                SubagentAdmissionOutcome::Rejected(result.clone())
+            };
+            let _ = admission_tx.send(outcome);
+        }
         self.result_tx.send(result)
     }
 }
@@ -922,6 +988,12 @@ register_resource!("grok_build", "SubagentDepthCounter", SubagentDepthCounter);
 pub struct MaxSubagentDepth(pub u32);
 
 register_resource!("grok_build", "MaxSubagentDepth", MaxSubagentDepth);
+
+register_resource!(
+    "grok_build",
+    "SubagentExecutionPolicy",
+    SubagentExecutionPolicy
+);
 
 /// Session-scoped validator for model-facing `Task.model` arguments.
 ///

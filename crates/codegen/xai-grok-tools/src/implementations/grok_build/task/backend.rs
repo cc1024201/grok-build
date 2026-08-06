@@ -13,12 +13,12 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use super::types::{
-    SpawnedSubagentRef, SubagentCancelOutcome, SubagentCancelRequest, SubagentCancelTarget,
-    SubagentDescribeOutcome, SubagentDescribeRequest, SubagentEvent, SubagentInspectRequest,
-    SubagentInspection, SubagentListRunningRequest, SubagentQueryRequest, SubagentRegistryCounts,
-    SubagentRegistryCountsRequest, SubagentRequest, SubagentResult, SubagentSnapshot,
-    SubagentSpawnRequest, SubagentSpawnedRefsRequest, SubagentValidateTypeOutcome,
-    SubagentValidateTypeRequest,
+    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentCancelOutcome,
+    SubagentCancelRequest, SubagentCancelTarget, SubagentDescribeOutcome, SubagentDescribeRequest,
+    SubagentEvent, SubagentInspectRequest, SubagentInspection, SubagentListRunningRequest,
+    SubagentQueryRequest, SubagentRegistryCounts, SubagentRegistryCountsRequest, SubagentRequest,
+    SubagentResult, SubagentSnapshot, SubagentSpawnRequest, SubagentSpawnedRefsRequest,
+    SubagentValidateTypeOutcome, SubagentValidateTypeRequest,
 };
 use crate::register_resource;
 use xai_tool_runtime::ToolError;
@@ -36,6 +36,13 @@ pub trait SubagentBackend: Send + Sync + 'static {
     /// For background mode the caller spawns a tokio task around this call
     /// and drops the receiver immediately.
     async fn spawn(&self, request: SubagentRequest) -> Result<SubagentResult, ToolError>;
+
+    /// Atomically submit a native background spawn and wait only for the
+    /// coordinator's admission decision, not for child completion.
+    async fn spawn_background(
+        &self,
+        request: SubagentRequest,
+    ) -> Result<SubagentAdmission, ToolError>;
 
     /// Query the current state of a subagent by ID.
     ///
@@ -305,6 +312,7 @@ impl SubagentBackend for ChannelBackend {
             .send(SubagentEvent::Spawn(SubagentSpawnRequest {
                 request: Box::new(request),
                 result_tx: respond_to,
+                admission_tx: None,
             }))
             .map_err(|_| {
                 ToolError::custom(
@@ -331,6 +339,47 @@ impl SubagentBackend for ChannelBackend {
                 "Subagent result channel dropped — child session may have crashed",
             )
         })
+    }
+
+    async fn spawn_background(
+        &self,
+        mut request: SubagentRequest,
+    ) -> Result<SubagentAdmission, ToolError> {
+        if let Some(parent_session_id) = self.parent_session_id.as_deref() {
+            request.parent_session_id = parent_session_id.to_owned();
+        }
+        let (result_tx, _result_rx) = oneshot::channel();
+        let (admission_tx, admission_rx) = oneshot::channel();
+        self.tx
+            .send(SubagentEvent::Spawn(SubagentSpawnRequest {
+                request: Box::new(request),
+                result_tx,
+                admission_tx: Some(admission_tx),
+            }))
+            .map_err(|_| {
+                ToolError::custom(
+                    "channel_closed",
+                    "Subagent coordinator channel closed — cannot spawn subagent",
+                )
+            })?;
+
+        match admission_rx.await.map_err(|_| {
+            ToolError::custom(
+                "channel_closed",
+                "Subagent admission channel dropped before a decision was returned",
+            )
+        })? {
+            SubagentAdmissionOutcome::Admitted(admission) => Ok(admission),
+            SubagentAdmissionOutcome::Rejected(result) => Err(ToolError::invalid_arguments(
+                result.error.unwrap_or_else(|| {
+                    if result.cancelled {
+                        "Subagent spawn was cancelled before admission".to_string()
+                    } else {
+                        "Subagent spawn was rejected before admission".to_string()
+                    }
+                }),
+            )),
+        }
     }
 
     async fn query(

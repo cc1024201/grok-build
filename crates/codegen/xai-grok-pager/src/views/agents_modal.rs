@@ -271,10 +271,11 @@ pub struct AgentsModalState {
 /// Built-in agent names that should be shown to the user.
 /// Skips internal variants (GrokBuildConcise, GrokBuildPlan,
 /// GrokBuildPlanNoSubagents, GrokBuildAskUser, Codex, Opencode,
-/// CursorExtended, GrokBuildOrchestrator).
+/// and GrokBuildOrchestrator).
 fn user_visible_builtins() -> &'static [BuiltinAgentName] {
     &[
         BuiltinAgentName::GrokBuild,
+        BuiltinAgentName::GrokBuildUltra,
         BuiltinAgentName::GeneralPurpose,
         BuiltinAgentName::Explore,
         BuiltinAgentName::Plan,

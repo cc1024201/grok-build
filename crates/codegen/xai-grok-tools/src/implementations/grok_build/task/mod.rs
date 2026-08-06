@@ -12,6 +12,7 @@
 //! - `MaxSubagentDepth` — max nesting (optional, defaults to [`MAX_SUBAGENT_DEPTH`])
 //! - `SessionIdResource` — current session ID for parent scoping (optional)
 //! - `SubagentForegroundWait` — host wait-window guard factory (optional)
+//! - `SubagentExecutionPolicy` — profile-level context/admission policy (optional)
 //! - `TaskModelValidator` — validates explicit model slugs before spawn
 
 pub mod backend;
@@ -277,6 +278,7 @@ impl xai_tool_runtime::Tool for TaskTool {
         let (
             depth,
             max_depth,
+            execution_policy,
             backend,
             model_validator,
             parent_session_id,
@@ -287,6 +289,10 @@ impl xai_tool_runtime::Tool for TaskTool {
 
             let depth = res.get::<SubagentDepthCounter>().map(|d| d.0).unwrap_or(0);
             let max_depth = effective_max_subagent_depth(&res);
+            let execution_policy = res
+                .get::<SubagentExecutionPolicy>()
+                .copied()
+                .unwrap_or_default();
 
             let backend = res
                 .get::<SubagentBackendResource>()
@@ -314,6 +320,7 @@ impl xai_tool_runtime::Tool for TaskTool {
             (
                 depth,
                 max_depth,
+                execution_policy,
                 backend,
                 model_validator,
                 parent_session_id,
@@ -500,39 +507,43 @@ impl xai_tool_runtime::Tool for TaskTool {
             // Model-spawned subagents must still appear in the idle reminder.
             surface_completion: true,
             await_to_completion: false,
-            fork_context: false,
+            fork_context: execution_policy.fork_context,
+            execution_policy,
             owner: SubagentOwner::Task,
             cancel_token: child_cancellation,
         };
 
-        // 4. Background mode: fire-and-forget via backend.spawn().
-        // Coordinator stores the result for TaskOutputTool polling.
-        // Both transport errors and coordinator rejections are logged so
-        // late failures (worktree creation, etc.) remain visible.
+        // 4. Background mode. Profiles that require truthful admission wait
+        // for the coordinator's atomic accept/reject decision before returning
+        // a task handle; normal Grok Build preserves the legacy detached path.
         if input.run_in_background {
-            let bg_backend = backend.clone();
-            let bg_id = id.clone();
-            let bg_type = input.subagent_type.clone();
-            tokio::spawn(async move {
-                match bg_backend.backend().spawn(request).await {
-                    Err(e) => {
-                        tracing::error!(
-                            subagent_id = %bg_id,
-                            subagent_type = %bg_type,
-                            "background spawn transport error: {e:#}",
-                        );
+            if execution_policy.acknowledge_background_admission {
+                backend.backend().spawn_background(request).await?;
+            } else {
+                let bg_backend = backend.clone();
+                let bg_id = id.clone();
+                let bg_type = input.subagent_type.clone();
+                tokio::spawn(async move {
+                    match bg_backend.backend().spawn(request).await {
+                        Err(e) => {
+                            tracing::error!(
+                                subagent_id = %bg_id,
+                                subagent_type = %bg_type,
+                                "background spawn transport error: {e:#}",
+                            );
+                        }
+                        Ok(r) if !r.success => {
+                            tracing::error!(
+                                subagent_id = %bg_id,
+                                subagent_type = %bg_type,
+                                error = ?r.error,
+                                "background spawn rejected by coordinator",
+                            );
+                        }
+                        Ok(_) => {}
                     }
-                    Ok(r) if !r.success => {
-                        tracing::error!(
-                            subagent_id = %bg_id,
-                            subagent_type = %bg_type,
-                            error = ?r.error,
-                            "background spawn rejected by coordinator",
-                        );
-                    }
-                    Ok(_) => {}
-                }
-            });
+                });
+            }
 
             // `resolve_tool_name` (not a template render): a missing kind
             // renders as empty-`Ok`, so a `Result` fallback never fires.
@@ -1307,6 +1318,73 @@ mod tests {
         }
 
         let _ = tokio::time::timeout(std::time::Duration::from_millis(500), drain).await;
+    }
+
+    #[tokio::test]
+    async fn execution_policy_forks_context_and_waits_for_admission() {
+        let (backend, mut rx) = make_backend();
+        let mut resources = resources_for_task(backend);
+        resources.insert(SubagentExecutionPolicy::ultra());
+        let run = tokio::spawn(async move {
+            xai_tool_runtime::Tool::run(
+                &TaskTool,
+                test_ctx(resources.into_shared()),
+                task_input("explore", true),
+            )
+            .await
+        });
+
+        let request = unwrap_spawn(rx.recv().await.expect("spawn request"));
+        assert!(request.fork_context);
+        assert_eq!(request.execution_policy, SubagentExecutionPolicy::ultra());
+        assert!(request.admission_tx.is_some());
+        request
+            .respond_with(|request| SubagentResult {
+                success: true,
+                output: std::sync::Arc::from("accepted"),
+                subagent_id: request.id.clone(),
+                child_session_id: request.id.clone(),
+                ..Default::default()
+            })
+            .expect("reply should be delivered");
+
+        let output = run
+            .await
+            .expect("tool task should not panic")
+            .expect("admitted background spawn should succeed");
+        assert!(matches!(output, ToolOutput::Text(_)));
+    }
+
+    #[tokio::test]
+    async fn background_admission_rejection_is_returned_to_the_model() {
+        let (backend, mut rx) = make_backend();
+        let mut resources = resources_for_task(backend);
+        resources.insert(SubagentExecutionPolicy::ultra());
+        let run = tokio::spawn(async move {
+            xai_tool_runtime::Tool::run(
+                &TaskTool,
+                test_ctx(resources.into_shared()),
+                task_input("general-purpose", true),
+            )
+            .await
+        });
+
+        let request = unwrap_spawn(rx.recv().await.expect("spawn request"));
+        request
+            .respond_with(|request| SubagentResult {
+                success: false,
+                error: Some("Ultra concurrency limit reached".to_string()),
+                subagent_id: request.id.clone(),
+                child_session_id: request.id.clone(),
+                ..Default::default()
+            })
+            .expect("rejection should be delivered");
+
+        let error = run
+            .await
+            .expect("tool task should not panic")
+            .expect_err("rejected admission must fail the tool call");
+        assert!(error.to_string().contains("concurrency limit reached"));
     }
 
     #[tokio::test]

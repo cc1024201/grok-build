@@ -91,6 +91,24 @@ fn registered_public_toolset_preset_names() -> Vec<String> {
         .map(|(name, _)| name.clone())
         .collect()
 }
+/// Ultra keeps the standard Grok Build toolset and primary-agent ownership,
+/// while enabling proactive, bounded delegation through the existing subagent
+/// runtime. This deliberately mirrors Codex Ultra's concise proactive policy
+/// instead of the strict `GrokBuildOrchestrator` delegation contract.
+const ULTRA_PROMPT_BODY: &str = "\
+## Ultra multi-agent mode
+
+Proactive multi-agent delegation is active. Use subagents when parallel work would materially \
+improve speed, coverage, or independent verification. Do not delegate trivial, tightly serial, \
+or duplicate work.
+
+You remain the primary agent: keep advancing the critical path while background children run, \
+inspect their evidence, reconcile disagreements, and own the final implementation and verification. \
+Give each child a clear, non-overlapping deliverable, relevant context, and acceptance criteria. \
+For concurrent edits, assign disjoint files/modules or use isolated worktrees. Wait for every child \
+whose result is required for correctness before answering, then present one integrated result rather \
+than a collection of agent reports.";
+
 /// Orchestrator-specific prompt body appended to the standard GrokBuild
 /// system prompt (`prompt.md`). Instructs the GBL model to delegate
 /// coding and exploration work to subagents.
@@ -682,6 +700,7 @@ where
 #[strum(serialize_all = "kebab-case")]
 pub enum BuiltinAgentName {
     GrokBuild,
+    GrokBuildUltra,
     GrokBuildConcise,
     GrokBuildPlan,
     GrokBuildPlanNoSubagents,
@@ -711,6 +730,7 @@ impl BuiltinAgentName {
     pub fn definition(self) -> AgentDefinition {
         match self {
             Self::GrokBuild => AgentDefinition::default_grok_build(),
+            Self::GrokBuildUltra => AgentDefinition::grok_build_ultra(),
             Self::GrokBuildConcise => AgentDefinition::grok_build_concise(),
             Self::GrokBuildPlan => AgentDefinition::grok_build_plan(),
             Self::GrokBuildPlanNoSubagents => AgentDefinition::grok_build_plan_no_subagents(),
@@ -787,6 +807,12 @@ pub struct AgentDefinition {
     pub disallowed_tools: Vec<String>,
     #[serde(default)]
     pub effort: Option<Effort>,
+    /// Session-level subagent execution policy. Defaults preserve the normal
+    /// Grok Build behavior; `grok-build-ultra` opts into bounded proactive
+    /// orchestration without changing the model-provider wire protocol.
+    #[serde(default)]
+    pub subagent_execution:
+        xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy,
     #[serde(default, deserialize_with = "deserialize_nonzero_u32")]
     pub max_turns: Option<u32>,
     #[serde(default)]
@@ -1496,6 +1522,7 @@ impl AgentDefinition {
             disallowed_tools: vec![],
             tools: vec![],
             effort: None,
+            subagent_execution: Default::default(),
             max_turns: None,
             isolation: None,
             background: None,
@@ -1523,6 +1550,19 @@ impl AgentDefinition {
             BuiltinAgentName::GrokBuild,
             "Grok Build agent for software engineering tasks.",
         )
+    }
+    /// Grok Build Ultra: the normal full-capability primary agent plus
+    /// proactive, context-aware, bounded multi-agent orchestration.
+    pub fn grok_build_ultra() -> Self {
+        Self {
+            prompt_body: Some(ULTRA_PROMPT_BODY.to_string()),
+            subagent_execution:
+                xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra(),
+            ..Self::base(
+                BuiltinAgentName::GrokBuildUltra,
+                "Grok Build with proactive bounded multi-agent orchestration.",
+            )
+        }
     }
     /// Grok Build Concise agent definition — concise output format for SFT/RL.
     pub fn grok_build_concise() -> Self {
@@ -1826,12 +1866,48 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn grok_build_ultra_is_a_full_tool_execution_profile() {
+        let normal = AgentDefinition::default_grok_build();
+        let ultra = AgentDefinition::grok_build_ultra();
+        let normal_tools: Vec<&str> = normal
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.id.as_str())
+            .collect();
+        let ultra_tools: Vec<&str> = ultra
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.id.as_str())
+            .collect();
+
+        assert_eq!(ultra_tools, normal_tools);
+        assert_eq!(
+            normal.subagent_execution,
+            xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::default()
+        );
+        assert_eq!(
+            ultra.subagent_execution,
+            xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra()
+        );
+        assert_eq!(ultra.model, ModelOverride::Inherit);
+        assert_eq!(ultra.effort, None);
+        assert!(!ultra.is_strict_harness());
+        let prompt = ultra.prompt_body.as_deref().expect("Ultra prompt body");
+        assert!(prompt.contains("Proactive multi-agent delegation is active"));
+        assert!(prompt.contains("keep advancing the critical path"));
+        assert!(prompt.contains("own the final implementation and verification"));
+    }
+
     /// Exhaustive match → adding a new `BuiltinAgentName` won't compile
     /// until classified.
     fn expected_strict_harness(name: BuiltinAgentName) -> bool {
         match name {
             BuiltinAgentName::Codex | BuiltinAgentName::GrokBuildOrchestrator => true,
             BuiltinAgentName::GrokBuild
+            | BuiltinAgentName::GrokBuildUltra
             | BuiltinAgentName::GrokBuildConcise
             | BuiltinAgentName::GrokBuildPlan
             | BuiltinAgentName::GrokBuildPlanNoSubagents
@@ -2516,6 +2592,7 @@ description: Test default tool config
         use std::str::FromStr;
         for (s, expected) in [
             ("grok-build", BuiltinAgentName::GrokBuild),
+            ("grok-build-ultra", BuiltinAgentName::GrokBuildUltra),
             ("grok-build-concise", BuiltinAgentName::GrokBuildConcise),
             ("grok-build-ask-user", BuiltinAgentName::GrokBuildAskUser),
             ("codex", BuiltinAgentName::Codex),

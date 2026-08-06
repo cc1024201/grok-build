@@ -327,6 +327,7 @@ fn auto_wake_test_request(id: &str) -> SubagentRequest {
         surface_completion: true,
         await_to_completion: false,
         fork_context: false,
+        execution_policy: Default::default(),
         owner: SubagentOwner::Task,
         cancel_token: CancellationToken::new(),
     }
@@ -1194,6 +1195,7 @@ fn bootstrap_test_request(fork_context: bool) -> SubagentRequest {
         surface_completion: false,
         await_to_completion: false,
         fork_context,
+        execution_policy: Default::default(),
         owner: SubagentOwner::Task,
         cancel_token: CancellationToken::new(),
     }

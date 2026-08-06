@@ -239,6 +239,7 @@ impl AgentRebuildSpec {
         #[allow(unused_variables)]
         let is_cursor_template =
             crate::session::is_cursor_system_template(&definition.system_prompt);
+        let subagent_execution = definition.subagent_execution;
         let mut builder = AgentBuilder::new(
             working_directory.clone(),
             terminal_backend.clone(),
@@ -319,6 +320,10 @@ impl AgentRebuildSpec {
             builder = builder.with_preloaded_skills(skills);
         }
         let agent = builder.build().await?;
+        agent
+            .tool_bridge()
+            .update_resource(subagent_execution)
+            .await;
         let model_validator = models_manager.clone();
         agent
             .tool_bridge()
