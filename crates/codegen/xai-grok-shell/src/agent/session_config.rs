@@ -4,7 +4,8 @@ use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption};
 
 use crate::session::unified_list::SessionKind;
 
-pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 5] = [
+pub(crate) const SELECTABLE_REASONING_EFFORTS: [ReasoningEffort; 6] = [
+    ReasoningEffort::Ultra,
     ReasoningEffort::Minimal,
     ReasoningEffort::Low,
     ReasoningEffort::Medium,
@@ -60,6 +61,7 @@ fn effort_label(effort: ReasoningEffort) -> String {
         ReasoningEffort::High => "High",
         ReasoningEffort::Xhigh => "X-High",
         ReasoningEffort::Max => "Max",
+        ReasoningEffort::Ultra => "Ultra",
     }
     .to_string()
 }

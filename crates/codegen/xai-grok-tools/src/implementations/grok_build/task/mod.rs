@@ -277,6 +277,7 @@ impl xai_tool_runtime::Tool for TaskTool {
         let (
             depth,
             max_depth,
+            ultra_mode,
             backend,
             model_validator,
             parent_session_id,
@@ -287,6 +288,7 @@ impl xai_tool_runtime::Tool for TaskTool {
 
             let depth = res.get::<SubagentDepthCounter>().map(|d| d.0).unwrap_or(0);
             let max_depth = effective_max_subagent_depth(&res);
+            let ultra_mode = res.get::<UltraMode>().is_some_and(|mode| mode.0);
 
             let backend = res
                 .get::<SubagentBackendResource>()
@@ -314,6 +316,7 @@ impl xai_tool_runtime::Tool for TaskTool {
             (
                 depth,
                 max_depth,
+                ultra_mode,
                 backend,
                 model_validator,
                 parent_session_id,
@@ -327,6 +330,12 @@ impl xai_tool_runtime::Tool for TaskTool {
                 "Subagent depth limit exceeded (current depth: {depth}, max: {max_depth}). \
                  Cannot spawn further nested subagents."
             )));
+        }
+        if ultra_mode && backend.backend().running_count(&parent_session_id).await >= 3 {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                "Ultra already has three active subagents for this session. Continue the \
+                 critical path locally or wait for an existing subagent before spawning another.",
+            ));
         }
 
         // Treat blank/empty/"null" resume_from as absent (models sometimes emit these).
@@ -500,7 +509,8 @@ impl xai_tool_runtime::Tool for TaskTool {
             // Model-spawned subagents must still appear in the idle reminder.
             surface_completion: true,
             await_to_completion: false,
-            fork_context: false,
+            fork_context: ultra_mode,
+            ultra_mode,
             owner: SubagentOwner::Task,
             cancel_token: child_cancellation,
         };

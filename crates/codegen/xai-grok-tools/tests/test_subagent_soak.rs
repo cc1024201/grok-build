@@ -398,6 +398,7 @@ fn soak_request(id: String, background: bool) -> SubagentRequest {
         surface_completion: true,
         await_to_completion: false,
         fork_context: false,
+        ultra_mode: false,
         owner: SubagentOwner::Task,
         cancel_token: CancellationToken::new(),
     }

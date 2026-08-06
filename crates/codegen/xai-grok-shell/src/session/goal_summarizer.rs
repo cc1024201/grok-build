@@ -182,6 +182,7 @@ impl ChannelSpawner {
             surface_completion: false,
             await_to_completion: false,
             fork_context: false,
+            ultra_mode: false,
             owner: SubagentOwner::Task,
             cancel_token: tokio_util::sync::CancellationToken::new(),
         };

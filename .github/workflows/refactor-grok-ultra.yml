@@ -1,0 +1,204 @@
+name: Refactor and validate Grok Build Ultra
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/refactor_grok_ultra.py
+      - .github/workflows/refactor-grok-ultra.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grok-ultra-refactor-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  refactor-and-validate:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BASELINE: a5589e958437d79e13db026eedcb1720bffd4063
+      BASELINE_IMAGE_TEST: crates/codegen/xai-grok-shell/src/session/acp_session_tests/tool_layer_images_bridge_tests.rs
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: grok-ultra-upstream-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            grok-ultra-${{ runner.os }}-
+
+      - name: Reset behavioral prototype to the official baseline
+        run: |
+          paths=(
+            crates/codegen/xai-grok-models/default_models.json
+            crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md
+            crates/codegen/xai-grok-pager/src/slash/commands/effort.rs
+            crates/codegen/xai-grok-pager/src/slash/commands/effort_levels.rs
+            crates/codegen/xai-grok-sampling-types/src/types.rs
+            crates/codegen/xai-grok-sampling-types/tests/ultra.rs
+            crates/codegen/xai-grok-shell/src/agent/session_config.rs
+            crates/codegen/xai-grok-shell/src/agent/subagent/tests/mod.rs
+            crates/codegen/xai-grok-shell/src/session/acp_session_impl/reminders.rs
+            crates/codegen/xai-grok-shell/src/session/acp_session_tests/tool_layer_images_bridge_tests.rs
+            crates/codegen/xai-grok-shell/src/session/goal_classifier.rs
+            crates/codegen/xai-grok-shell/src/session/goal_planner.rs
+            crates/codegen/xai-grok-shell/src/session/goal_strategist.rs
+            crates/codegen/xai-grok-shell/src/session/goal_summarizer.rs
+            crates/codegen/xai-grok-shell/src/session/workflow/host_service.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/scheduler/actor.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/backend.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/backend_tests.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_tests.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/mod.rs
+            crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs
+            crates/codegen/xai-grok-tools/tests/test_subagent_soak.rs
+          )
+          for path in "${paths[@]}"; do
+            if git cat-file -e "$BASELINE:$path" 2>/dev/null; then
+              git restore --source="$BASELINE" --staged --worktree -- "$path"
+            else
+              git rm -f --ignore-unmatch -- "$path"
+            fi
+          done
+
+      - name: Apply the upstream-oriented source refactor
+        run: |
+          python .github/refactor_grok_ultra.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/codegen/xai-grok-agent/src/config.rs")
+          text = path.read_text(encoding="utf-8")
+          old = """            BuiltinAgentName::GrokBuild
+                      | BuiltinAgentName::GrokBuildConcise
+          """
+          new = """            BuiltinAgentName::GrokBuild
+                      | BuiltinAgentName::GrokBuildUltra
+                      | BuiltinAgentName::GrokBuildConcise
+          """
+          if text.count(old) != 1:
+              raise SystemExit(
+                  "expected exactly one strict-harness classification insertion point"
+              )
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Apply a test-only compatibility shim for the upstream baseline
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["BASELINE_IMAGE_TEST"])
+          text = path.read_text(encoding="utf-8")
+          marker = "use super::*;\n"
+          insertion = marker + "use base64::Engine as _;\n"
+          if "use base64::Engine" in text:
+              raise SystemExit("the upstream baseline no longer needs the base64 Engine shim")
+          if text.count(marker) != 1:
+              raise SystemExit("unexpected upstream image-test import layout")
+          path.write_text(text.replace(marker, insertion, 1), encoding="utf-8")
+          PY
+
+      - name: Install DotSlash
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
+
+      - name: Format Rust sources
+        run: cargo fmt --all
+
+      - name: Verify provider protocol remains unchanged
+        run: |
+          git diff --quiet "$BASELINE" -- \
+            crates/codegen/xai-grok-models/default_models.json \
+            crates/codegen/xai-grok-sampling-types/src/types.rs \
+            crates/codegen/xai-grok-pager/src/slash/commands/effort.rs \
+            crates/codegen/xai-grok-pager/src/slash/commands/effort_levels.rs
+          ! git grep -n 'ReasoningEffort::Ultra\|ultra_mode' -- '*.rs'
+
+      - name: Test Ultra agent-profile invariants
+        run: cargo test -p xai-grok-agent --lib grok_build_ultra_is_a_full_tool_execution_profile
+
+      - name: Test profile-to-session policy resolution
+        run: cargo test -p xai-grok-shell --lib subagent_execution_policy_is_opt_in_to_ultra
+
+      - name: Test policy propagation and truthful admission reporting
+        run: |
+          cargo test -p xai-grok-tools --lib execution_policy_forks_context_and_waits_for_admission
+          cargo test -p xai-grok-tools --lib background_admission_rejection_is_returned_to_the_model
+
+      - name: Test atomic coordinator admission
+        run: cargo test -p xai-grok-tools --lib execution_policy_admission_is_atomic_under_concurrent_spawns
+
+      - name: Test background admission lifecycle
+        run: cargo test -p xai-grok-tools --lib task_background_spawn_returns_an_admission_ack_before_completion
+
+      - name: Test agent definitions
+        run: cargo test -p xai-grok-agent
+
+      - name: Test subagent tools and coordinator
+        run: cargo test -p xai-grok-tools
+
+      - name: Test shell runtime
+        run: cargo test -p xai-grok-shell
+
+      - name: Test pager UI
+        run: cargo test -p xai-grok-pager
+
+      - name: Lint touched runtime crates
+        run: cargo clippy -p xai-grok-agent -p xai-grok-tools -p xai-grok-shell -p xai-grok-pager --all-targets -- -D warnings
+
+      - name: Check terminal application composition
+        run: cargo check -p xai-grok-pager-bin
+
+      - name: Verify diff and publish implementation
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          rm .github/refactor_grok_ultra.py
+          rm .github/workflows/refactor-grok-ultra.yml
+          git restore --source="$BASELINE" --staged --worktree -- "$BASELINE_IMAGE_TEST"
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", "--diff-filter=ACM", "-z"]
+          ).split(b"\0")
+          for raw_path in changed:
+              if not raw_path:
+                  continue
+              path = Path(raw_path.decode())
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if b"\0" in data:
+                  continue
+              path.write_bytes(data.rstrip(b"\r\n") + b"\n")
+          PY
+          git diff --check
+          git diff --quiet "$BASELINE" -- "$BASELINE_IMAGE_TEST"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add bounded Grok Build Ultra profile"
+          git push origin "HEAD:${BRANCH}"

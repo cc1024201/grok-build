@@ -327,6 +327,7 @@ fn auto_wake_test_request(id: &str) -> SubagentRequest {
         surface_completion: true,
         await_to_completion: false,
         fork_context: false,
+        ultra_mode: false,
         owner: SubagentOwner::Task,
         cancel_token: CancellationToken::new(),
     }

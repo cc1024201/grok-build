@@ -450,6 +450,7 @@ impl HostService {
                     surface_completion: false,
                     await_to_completion: true,
                     fork_context,
+                    ultra_mode: false,
                     owner: SubagentOwner::workflow(&self.params.run_id),
                     cancel_token: cancel_token.clone(),
                 }

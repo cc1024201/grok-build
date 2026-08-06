@@ -78,6 +78,13 @@ pub trait SubagentBackend: Send + Sync + 'static {
         harness_agent_type: Option<&str>,
         parent_session_id: &str,
     ) -> SubagentDescribeOutcome;
+
+    /// Number of active children currently owned by this parent session.
+    /// Implementations that cannot inspect the coordinator may return zero;
+    /// the coordinator still enforces the authoritative hard limit.
+    async fn running_count(&self, _parent_session_id: &str) -> usize {
+        0
+    }
 }
 
 /// Resource wrapper injected into every session's `Resources`.
@@ -458,6 +465,10 @@ impl SubagentBackend for ChannelBackend {
                 SubagentDescribeOutcome::Unavailable
             }
         }
+    }
+
+    async fn running_count(&self, parent_session_id: &str) -> usize {
+        self.list_running(parent_session_id).await.len()
     }
 }
 
