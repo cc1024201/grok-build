@@ -64,15 +64,13 @@ if source is None:
     index, char, source = recovered
     print(f"Recovered transformer payload at character {index} with {char!r}")
 
-# Keep the transformer's helper functions isolated from this normalizer.
 transform_globals = {
     "__name__": "__main__",
     "__file__": "apply_grok_ultra_decoded.py",
 }
 exec(compile(source, "apply_grok_ultra_decoded.py", "exec"), transform_globals)
 
-# Ultra is a local execution profile, not provider-owned model metadata. Keep
-# metadata parsing pure/reversible and reject a server-supplied Ultra tier.
+# Ultra is a local execution profile, not provider-owned model metadata.
 types_path = REPO / "crates/codegen/xai-grok-sampling-types/src/types.rs"
 replace_once(
     types_path,
@@ -147,17 +145,6 @@ fn provider_effort_metadata_remains_unmodified_by_client_ultra() {
 ''',
 )
 
-# Register the live session marker through Grok Build's canonical resource registry.
-task_types = REPO / "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs"
-replace_text_once(
-    task_types,
-    "pub struct UltraMode(pub bool);\n",
-    '''pub struct UltraMode(pub bool);
-
-register_resource!("grok_build", "UltraMode", UltraMode);
-''',
-)
-
 # Normalize a one-argument resource update if the generated implementation has one.
 shell_src = REPO / "crates/codegen/xai-grok-shell/src"
 updated_calls = 0
@@ -173,8 +160,7 @@ for path in shell_src.rglob("*.rs"):
         updated_calls += count
 print(f"Normalized {updated_calls} live Ultra resource update call(s)")
 
-# Workflow-owned child runs are a separate orchestration system and must never
-# consume the interactive Ultra admission budget.
+# Workflow-owned children do not consume interactive Ultra admission slots.
 workflow_host = REPO / "crates/codegen/xai-grok-shell/src/session/workflow/host_service.rs"
 replace_text_once(
     workflow_host,
@@ -182,7 +168,7 @@ replace_text_once(
     "                    fork_context,\n                    ultra_mode: false,\n                    owner: SubagentOwner::workflow(&self.params.run_id),\n",
 )
 
-# Optional cleanup only; the generated source may already omit this import.
+# Optional cleanup only.
 builder_path = REPO / "crates/codegen/xai-grok-agent/src/builder.rs"
 builder_text = builder_path.read_text(encoding="utf-8")
 builder_text, removed = re.subn(r"\bUltraMode,\s*", "", builder_text)
