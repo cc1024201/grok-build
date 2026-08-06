@@ -51,6 +51,7 @@ jobs:
             crates/codegen/xai-grok-models/default_models.json
             crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md
             crates/codegen/xai-grok-pager/src/slash/commands/effort.rs
+            crates/codegen/xai-grok-pager/src/slash/commands/effort_levels.rs
             crates/codegen/xai-grok-sampling-types/src/types.rs
             crates/codegen/xai-grok-sampling-types/tests/ultra.rs
             crates/codegen/xai-grok-shell/src/agent/session_config.rs
@@ -92,7 +93,8 @@ jobs:
           git diff --quiet "$BASELINE" -- \
             crates/codegen/xai-grok-models/default_models.json \
             crates/codegen/xai-grok-sampling-types/src/types.rs \
-            crates/codegen/xai-grok-pager/src/slash/commands/effort.rs
+            crates/codegen/xai-grok-pager/src/slash/commands/effort.rs \
+            crates/codegen/xai-grok-pager/src/slash/commands/effort_levels.rs
           ! git grep -n 'ReasoningEffort::Ultra\|ultra_mode' -- '*.rs'
 
       - name: Test Ultra agent-profile invariants
