@@ -5,12 +5,14 @@ on:
     branches:
       - agent/grok-ultra-selfuse
     paths:
+      - .github/apply-ultra-core.py
       - .github/ultra-core.patch
       - .github/workflows/export-ultra-sources.yml
   pull_request:
     branches:
       - main
     paths:
+      - .github/apply-ultra-core.py
       - .github/ultra-core.patch
       - .github/workflows/export-ultra-sources.yml
   workflow_dispatch:
@@ -49,11 +51,8 @@ jobs:
             grok-ultra-upstream-${{ runner.os }}-
             grok-ultra-${{ runner.os }}-
 
-      - name: Apply implementation patch
-        run: |
-          set -euo pipefail
-          git apply --check .github/ultra-core.patch
-          git apply .github/ultra-core.patch
+      - name: Apply verified implementation payload
+        run: python .github/apply-ultra-core.py
 
       - name: Install DotSlash
         run: command -v dotslash >/dev/null || cargo install dotslash --locked
@@ -82,6 +81,7 @@ jobs:
       - name: Publish formatted source
         run: |
           set -euo pipefail
+          rm .github/apply-ultra-core.py
           rm .github/ultra-core.patch
           rm .github/workflows/export-ultra-sources.yml
           git diff --check
