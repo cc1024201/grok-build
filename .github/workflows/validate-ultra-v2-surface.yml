@@ -50,8 +50,37 @@ jobs:
             grok-ultra-selfuse-${{ runner.os }}-
             grok-ultra-${{ runner.os }}-
 
-      - name: Apply verified V2 surface
-        run: python .github/apply-ultra-v2-surface.py
+      - name: Diagnose and apply non-drifting V2 hunks
+        run: |
+          python - <<'PY'
+          import ast
+          import base64
+          import hashlib
+          import subprocess
+          import zlib
+          from pathlib import Path
+
+          source = Path('.github/apply-ultra-v2-surface.py').read_text()
+          values = {}
+          for node in ast.parse(source).body:
+              if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                  try:
+                      values[node.targets[0].id] = ast.literal_eval(node.value)
+                  except Exception:
+                      pass
+          patch = zlib.decompress(base64.b85decode(values['PAYLOAD'].encode()))
+          actual = hashlib.sha256(patch).hexdigest()
+          if actual != values['EXPECTED_SHA256']:
+              raise SystemExit(f'payload checksum mismatch: {actual}')
+          subprocess.run(['git', 'apply', '--reject', '--whitespace=nowarn', '-'], input=patch)
+          rejects = sorted(Path('.').rglob('*.rej'))
+          if rejects:
+              print('\n=== REJECTED HUNKS ===')
+              for reject in rejects:
+                  print(f'\n--- {reject} ---')
+                  print(reject.read_text())
+              raise SystemExit(f'{len(rejects)} file(s) contain rejected hunks')
+          PY
 
       - name: Install DotSlash
         run: command -v dotslash >/dev/null || cargo install dotslash --locked
@@ -79,6 +108,7 @@ jobs:
           set -euo pipefail
           rm .github/apply-ultra-v2-surface.py
           rm .github/workflows/validate-ultra-v2-surface.yml
+          rm .github/workflows/export-current-ultra.yml
           git diff --check
           git status --short
           git config user.name "github-actions[bot]"
