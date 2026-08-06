@@ -31,6 +31,14 @@ def replace_once(path: Path, pattern: str, replacement: str) -> None:
     path.write_text(updated, encoding="utf-8")
 
 
+def replace_text_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"expected exactly one text match in {path}: {old!r}; found {count}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 text = SOURCE.read_text(encoding="utf-8")
 match = re.search(r"b64decode\('([^']+)'\)", text)
 if match is None:
@@ -125,7 +133,7 @@ replace_once(
 /// Parse the per-model''',
 )
 
-# The focused test now enforces the ownership boundary rather than mutating the
+# The focused test enforces the ownership boundary rather than mutating the
 # generic provider parser to manufacture a client-only menu row.
 ultra_test = REPO / "crates/codegen/xai-grok-sampling-types/tests/ultra.rs"
 replace_once(
@@ -141,4 +149,42 @@ fn provider_effort_metadata_remains_unmodified_by_client_ultra() {
 ''',
 )
 
-print("Normalized client-owned Ultra semantics")
+# Register the live session marker through Grok Build's canonical resource
+# registry so it can be queried by TaskTool and replaced at runtime.
+task_types = REPO / "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs"
+replace_text_once(
+    task_types,
+    "pub struct UltraMode(pub bool);\n",
+    '''pub struct UltraMode(pub bool);
+
+register_resource!("grok_build", "UltraMode", UltraMode);
+''',
+)
+
+# Session switching belongs at the Agent boundary. Agent::update_resource owns
+# the conversion into the finalized ToolBridge's closure-based mutation API.
+shell_src = REPO / "crates/codegen/xai-grok-shell/src"
+updated_calls = 0
+for path in shell_src.rglob("*.rs"):
+    source_text = path.read_text(encoding="utf-8")
+    updated_text, count = re.subn(
+        r"\.tool_bridge\(\)\s*\.update_resource\(\s*UltraMode::enabled\(enabled\)\s*\)",
+        ".update_resource(UltraMode::enabled(enabled))",
+        source_text,
+    )
+    if count:
+        path.write_text(updated_text, encoding="utf-8")
+        updated_calls += count
+if updated_calls != 1:
+    raise SystemExit(f"expected exactly one Ultra Agent resource update; found {updated_calls}")
+
+# The builder only seeds UltraMode as a resource value; it does not reference
+# the type directly after ToolBridge construction.
+builder_path = REPO / "crates/codegen/xai-grok-agent/src/builder.rs"
+builder_text = builder_path.read_text(encoding="utf-8")
+builder_text, removed = re.subn(r"\bUltraMode,\s*", "", builder_text)
+if removed != 1:
+    raise SystemExit(f"expected exactly one unused UltraMode builder import; found {removed}")
+builder_path.write_text(builder_text, encoding="utf-8")
+
+print("Normalized client-owned Ultra semantics and session resource wiring")
