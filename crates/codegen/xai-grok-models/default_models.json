@@ -21,6 +21,11 @@
       "compactions_remaining": 1,
       "reasoning_efforts": [
         {
+          "value": "ultra",
+          "label": "Ultra",
+          "description": "Proactive multi-agent orchestration with the highest Grok effort"
+        },
+        {
           "value": "high",
           "label": "High Effort",
           "description": "Highest implementation quality with extensive reasoning",

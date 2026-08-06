@@ -96,6 +96,9 @@ pub struct SubagentRequest {
     /// Harness-only: seed child with normalized parent conversation, then append
     /// `prompt`. Not on TaskToolInput. Successful `resume_from` takes precedence.
     pub fork_context: bool,
+    /// Spawn originated from the user-selectable Ultra execution profile.
+    /// Used by the coordinator for a hard, session-scoped concurrency budget.
+    pub ultra_mode: bool,
     pub owner: SubagentOwner,
     pub cancel_token: CancellationToken,
 }
@@ -922,6 +925,13 @@ register_resource!("grok_build", "SubagentDepthCounter", SubagentDepthCounter);
 pub struct MaxSubagentDepth(pub u32);
 
 register_resource!("grok_build", "MaxSubagentDepth", MaxSubagentDepth);
+
+/// Dynamic execution-profile flag updated at each turn from the session's
+/// current reasoning effort. TaskTool reads it when constructing child work.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UltraMode(pub bool);
+
+register_resource!("grok_build", "UltraMode", UltraMode);
 
 /// Session-scoped validator for model-facing `Task.model` arguments.
 ///

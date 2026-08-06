@@ -338,3 +338,23 @@ Only the top-level session spawns subagents. A subagent cannot spawn its own sub
 - Simple tasks that the parent can handle directly
 - Tasks that require tight back-and-forth with the user, since a subagent runs autonomously and isn't suited to interactive exchanges
 - Tasks where the context setup cost exceeds the parallelism benefit
+
+## Ultra execution mode
+
+Select **Ultra** from the model effort menu or run:
+
+```text
+/effort ultra
+```
+
+Ultra keeps the currently selected Grok model and enables proactive multi-agent
+orchestration. The primary agent decides when parallel work is useful, can run
+up to three subagents at once, keeps working while they run, and integrates
+critical results before answering. Model requests use the highest effort
+currently advertised for Grok 4.5 (`high`); `ultra` itself is a Grok Build
+execution profile, not a new provider API value.
+
+Subagents spawned in Ultra inherit the parent conversation through Grok Build's
+existing fork pipeline. Read-only investigations share the workspace. For
+parallel writers, the primary agent is instructed to assign disjoint ownership
+or use `isolation: "worktree"` to prevent conflicting edits.

@@ -60,6 +60,19 @@ where
     Option::<T>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
+/// Serialize a client-side effort for Chat Completions. `Ultra` is an
+/// orchestration profile, not a provider wire value, so Grok receives `high`.
+fn serialize_reasoning_effort_for_wire<S>(
+    value: &Option<ReasoningEffort>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let wire = value.map(ReasoningEffort::wire_effort);
+    wire.serialize(serializer)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,7 +98,10 @@ pub struct ChatCompletionRequest {
     pub search_parameters: Option<SearchParameters>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<crate::rs::ResponseFormat>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_reasoning_effort_for_wire"
+    )]
     pub reasoning_effort: Option<ReasoningEffort>,
 
     /// custom headers
@@ -771,6 +787,9 @@ pub enum ReasoningEffort {
     High,
     Xhigh,
     Max,
+    /// Client-side proactive multi-agent orchestration profile.
+    /// Provider requests are mapped to [`ReasoningEffort::High`].
+    Ultra,
 }
 
 impl ReasoningEffort {
@@ -783,6 +802,7 @@ impl ReasoningEffort {
             Self::High => crate::rs::ReasoningEffort::High,
             Self::Xhigh => crate::rs::ReasoningEffort::Xhigh,
             Self::Max => crate::rs::ReasoningEffort::Max,
+            Self::Ultra => crate::rs::ReasoningEffort::High,
         }
     }
 
@@ -809,12 +829,27 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::Xhigh => "xhigh",
             Self::Max => "max",
+            Self::Ultra => "ultra",
         }
+    }
+
+    /// The provider-facing effort. Ultra keeps its client-side identity in
+    /// session state while using Grok's highest currently advertised effort.
+    pub fn wire_effort(self) -> Self {
+        match self {
+            Self::Ultra => Self::High,
+            other => other,
+        }
+    }
+
+    pub fn is_ultra(self) -> bool {
+        self == Self::Ultra
     }
 
     pub fn to_messages_api(self) -> Option<&'static str> {
         match self {
             Self::None | Self::Minimal => None,
+            Self::Ultra => Some("high"),
             _ => Some(self.as_str()),
         }
     }
@@ -838,8 +873,9 @@ impl std::str::FromStr for ReasoningEffort {
             "high" => Ok(Self::High),
             "xhigh" => Ok(Self::Xhigh),
             "max" => Ok(Self::Max),
+            "ultra" => Ok(Self::Ultra),
             _ => Err(format!(
-                "invalid reasoning effort: {s:?} (expected one of: none, minimal, low, medium, high, xhigh, max)"
+                "invalid reasoning effort: {s:?} (expected one of: none, minimal, low, medium, high, xhigh, max, ultra)"
             )),
         }
     }
@@ -873,8 +909,15 @@ pub fn parse_reasoning_effort_meta(
             return None;
         }
     };
-    match s.parse() {
-        Ok(eff) => Some(eff),
+    match s.parse::<ReasoningEffort>() {
+        Ok(effort) if effort.is_ultra() => {
+            tracing::warn!(
+                value = %s,
+                "meta.reasoningEffort: Ultra is a client execution profile, ignoring provider value"
+            );
+            None
+        }
+        Ok(effort) => Some(effort),
         Err(err) => {
             tracing::warn!(value = %s, error = %err, "meta.reasoningEffort: parse failed, ignoring");
             None
@@ -974,6 +1017,13 @@ pub fn parse_reasoning_effort_options(arr: &[serde_json::Value]) -> Vec<Reasonin
     arr.iter()
         .filter_map(
             |el| match serde_json::from_value::<ReasoningEffortOption>(el.clone()) {
+                Ok(opt) if opt.value.is_ultra() => {
+                    tracing::warn!(
+                        value = %el,
+                        "reasoningEfforts: Ultra is client-owned; skipping provider entry"
+                    );
+                    None
+                }
                 Ok(opt) => Some(opt),
                 Err(err) => {
                     tracing::warn!(value = %el, error = %err, "reasoningEfforts: skipping invalid entry");

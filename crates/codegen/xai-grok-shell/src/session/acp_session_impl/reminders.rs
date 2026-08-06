@@ -178,6 +178,20 @@ pub(crate) fn date_rollover_reminder(
 /// Wrapped in grok's `<system-reminder>` shape by [`SessionActor::push_system_reminder`].
 /// See [`SessionActor::maybe_inject_interrupt_reminder`].
 pub(crate) const INTERRUPT_REMINDER: &str = "[Request interrupted by user]";
+const ULTRA_ORCHESTRATION_REMINDER: &str = "\
+Ultra orchestration is active. You are the primary agent and remain responsible for the final \
+result. Proactively use subagents when parallel work materially improves speed, coverage, or \
+independent verification; do not create them for trivial, tightly serial, or duplicate work.\n\n\
+- Decompose only genuinely independent work and give every child a clear, non-overlapping \
+  deliverable, relevant context, and acceptance criteria.\n\
+- Keep advancing the critical path while background children run. Do not stop merely to poll.\n\
+- Use read-only children for exploration or independent review. For concurrent writing, assign \
+  disjoint files/modules or use isolated worktrees; never let children race on the same files.\n\
+- At most three subagents may be active. Reuse or wait for existing children instead of \
+  spawning redundant work.\n\
+- Before answering, wait for every result that is critical to correctness, inspect the actual \
+  code and test outcomes, reconcile disagreements, and perform any final verification yourself.\n\
+- Present one integrated answer to the user, not a raw collection of agent reports.";
 const WORKFLOW_RESULT_SUMMARY_REMINDER_CAP: usize = 4 * 1024;
 const WORKFLOW_OBJECTIVE_REMINDER_CAP: usize = 256;
 fn workflow_completion_detail(detail: &str) -> std::borrow::Cow<'_, str> {
@@ -232,6 +246,20 @@ impl SessionActor {
         self.push_system_reminder(&body);
     }
     pub(super) async fn inject_workflow_status_reminder(&self) {
+        let ultra_enabled = self
+            .chat_state_handle
+            .get_sampling_config()
+            .await
+            .and_then(|config| config.reasoning_effort)
+            .is_some_and(xai_grok_sampling_types::ReasoningEffort::is_ultra);
+        self.tool_bridge_handle()
+            .update_resource(
+                xai_grok_tools::implementations::grok_build::task::types::UltraMode(ultra_enabled),
+            )
+            .await;
+        if ultra_enabled && self.startup_hints.parent_session_id.is_none() {
+            self.push_system_reminder(ULTRA_ORCHESTRATION_REMINDER);
+        }
         if self.goal_loop_active() {
             return;
         }

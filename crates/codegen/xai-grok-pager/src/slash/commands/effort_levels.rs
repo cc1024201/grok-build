@@ -7,6 +7,7 @@ use crate::slash::command::ArgItem;
 /// Effort levels in the built-in fallback menu (strongest first). `none`/`minimal`
 /// are still accepted by `ReasoningEffort::from_str` for power users.
 pub(crate) const EFFORT_LEVELS: &[ReasoningEffort] = &[
+    ReasoningEffort::Ultra,
     ReasoningEffort::Xhigh,
     ReasoningEffort::High,
     ReasoningEffort::Medium,
@@ -22,6 +23,7 @@ pub(crate) fn effort_description(level: ReasoningEffort) -> &'static str {
         ReasoningEffort::High => "Heavy reasoning",
         ReasoningEffort::Xhigh => "Extended reasoning",
         ReasoningEffort::Max => "Maximum reasoning",
+        ReasoningEffort::Ultra => "Proactive multi-agent orchestration",
     }
 }
 

@@ -24,6 +24,8 @@ use super::coordinator_state::{
     active_summary, background_at_deadline, background_if_caller_gone, completed_snapshot,
     completion_summary, sleep_until, workflow_outstanding,
 };
+const ULTRA_MAX_ACTIVE_SUBAGENTS_PER_SESSION: usize = 3;
+
 use super::types::{
     SpawnedSubagentRef, SubagentCancelOutcome, SubagentCancelTarget, SubagentDescribeOutcome,
     SubagentEvent, SubagentOutstandingReply, SubagentOwner, SubagentRegistryCounts,
@@ -225,6 +227,34 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         ..Default::default()
                     });
                     return;
+                }
+                if request.ultra_mode && !request.owner.is_workflow() {
+                    let running = self
+                        .pending
+                        .values()
+                        .map(|child| &child.request)
+                        .chain(self.active.values().map(|child| &child.request))
+                        .filter(|child| {
+                            child.ultra_mode
+                                && !child.owner.is_workflow()
+                                && child.parent_session_id == request.parent_session_id
+                        })
+                        .count();
+                    if running >= ULTRA_MAX_ACTIVE_SUBAGENTS_PER_SESSION {
+                        let id = request.id.clone();
+                        let _ = command.result_tx.send(SubagentResult {
+                            success: false,
+                            error: Some(format!(
+                                "Ultra concurrency limit reached: at most \
+                                 {ULTRA_MAX_ACTIVE_SUBAGENTS_PER_SESSION} active subagents \
+                                 are allowed per session"
+                            )),
+                            subagent_id: id.clone(),
+                            child_session_id: id,
+                            ..Default::default()
+                        });
+                        return;
+                    }
                 }
                 let id = request.id.clone();
                 if self.pending.contains_key(&id)
