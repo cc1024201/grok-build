@@ -31,8 +31,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: grok-ultra-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+
       - name: Install DotSlash
-        run: cargo install dotslash --locked
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
 
       - name: Apply Ultra source changes
         run: python .github/recover_and_apply_grok_ultra.py
