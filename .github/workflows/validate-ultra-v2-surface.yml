@@ -6,12 +6,16 @@ on:
       - agent/grok-ultra-selfuse
     paths:
       - .github/apply-ultra-v2-surface.py
+      - .github/ultra-agent-control.b85
+      - .github/ultra-grok-mod.b85
       - .github/workflows/validate-ultra-v2-surface.yml
   pull_request:
     branches:
       - main
     paths:
       - .github/apply-ultra-v2-surface.py
+      - .github/ultra-agent-control.b85
+      - .github/ultra-grok-mod.b85
       - .github/workflows/validate-ultra-v2-surface.yml
   workflow_dispatch:
 
@@ -50,7 +54,7 @@ jobs:
             grok-ultra-selfuse-${{ runner.os }}-
             grok-ultra-${{ runner.os }}-
 
-      - name: Diagnose and apply non-drifting V2 hunks
+      - name: Apply verified V2 surface
         run: |
           python - <<'PY'
           import ast
@@ -71,15 +75,34 @@ jobs:
           patch = zlib.decompress(base64.b85decode(values['PAYLOAD'].encode()))
           actual = hashlib.sha256(patch).hexdigest()
           if actual != values['EXPECTED_SHA256']:
-              raise SystemExit(f'payload checksum mismatch: {actual}')
-          subprocess.run(['git', 'apply', '--reject', '--whitespace=nowarn', '-'], input=patch)
-          rejects = sorted(Path('.').rglob('*.rej'))
-          if rejects:
-              print('\n=== REJECTED HUNKS ===')
-              for reject in rejects:
-                  print(f'\n--- {reject} ---')
-                  print(reject.read_text())
-              raise SystemExit(f'{len(rejects)} file(s) contain rejected hunks')
+              raise SystemExit(f'V2 patch checksum mismatch: {actual}')
+
+          excluded = [
+              'crates/codegen/xai-grok-tools/src/implementations/grok_build/agent_control.rs',
+              'crates/codegen/xai-grok-tools/src/implementations/grok_build/mod.rs',
+          ]
+          args = ['git', 'apply'] + [arg for path in excluded for arg in ('--exclude', path)] + ['-']
+          subprocess.run(args[:2] + ['--check'] + args[2:], input=patch, check=True)
+          subprocess.run(args, input=patch, check=True)
+
+          targets = [
+              (
+                  Path('.github/ultra-agent-control.b85'),
+                  Path(excluded[0]),
+                  '413dd1ce3cfd62e38a9ef407394a685d5348cfd64c51ed5969093dfef4dcee7d',
+              ),
+              (
+                  Path('.github/ultra-grok-mod.b85'),
+                  Path(excluded[1]),
+                  'c0ff2c5f2310767f0f6f8451e40b57aba09b96e6487d7f0dc2b93b0ceeabdb76',
+              ),
+          ]
+          for payload_path, target_path, expected in targets:
+              data = zlib.decompress(base64.b85decode(payload_path.read_text().strip().encode()))
+              actual = hashlib.sha256(data).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'{target_path} checksum mismatch: {actual}')
+              target_path.write_bytes(data)
           PY
 
       - name: Install DotSlash
@@ -107,8 +130,10 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/apply-ultra-v2-surface.py
+          rm .github/ultra-agent-control.b85
+          rm .github/ultra-grok-mod.b85
           rm .github/workflows/validate-ultra-v2-surface.yml
-          rm .github/workflows/export-current-ultra.yml
+          rm -f .github/workflows/export-current-ultra.yml
           git diff --check
           git status --short
           git config user.name "github-actions[bot]"
