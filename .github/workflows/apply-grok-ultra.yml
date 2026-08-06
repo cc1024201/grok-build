@@ -41,7 +41,6 @@ jobs:
             ~/.cargo/git/db
             target
           key: grok-ultra-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-          save-always: true
 
       - name: Apply Ultra source changes
         run: python .github/recover_and_apply_grok_ultra.py
@@ -74,6 +73,23 @@ jobs:
           rm .github/apply_grok_ultra.py
           rm .github/recover_and_apply_grok_ultra.py
           rm .github/workflows/apply-grok-ultra.yml
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          for raw_path in subprocess.check_output(
+              ["git", "diff", "--name-only", "-z"]
+          ).split(b"\0"):
+              if not raw_path:
+                  continue
+              path = Path(raw_path.decode())
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if b"\0" in data:
+                  continue
+              path.write_bytes(data.rstrip(b"\r\n") + b"\n")
+          PY
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
