@@ -56,7 +56,12 @@ if source is None:
     index, char, source = recovered
     print(f"Recovered transformer payload at character {index} with {char!r}")
 
-exec(compile(source, "apply_grok_ultra_decoded.py", "exec"))
+# Keep the transformer's helper functions isolated from this normalizer.
+transform_globals = {
+    "__name__": "__main__",
+    "__file__": "apply_grok_ultra_decoded.py",
+}
+exec(compile(source, "apply_grok_ultra_decoded.py", "exec"), transform_globals)
 
 # Ultra is a local execution profile, not provider-owned model metadata. Keep
 # metadata parsing pure/reversible and reject a server-supplied Ultra tier.
