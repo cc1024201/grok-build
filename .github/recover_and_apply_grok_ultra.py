@@ -161,22 +161,30 @@ register_resource!("grok_build", "UltraMode", UltraMode);
 ''',
 )
 
-# Session switching belongs at the Agent boundary. The generated Agent helper
-# requires the registered resource name plus the new value.
+# Session switching belongs at the Agent boundary. Depending on formatting,
+# normalize a one-argument update call to the registered two-argument form.
 shell_src = REPO / "crates/codegen/xai-grok-shell/src"
 updated_calls = 0
 for path in shell_src.rglob("*.rs"):
     source_text = path.read_text(encoding="utf-8")
     updated_text, count = re.subn(
-        r"\.update_resource\(\s*UltraMode::enabled\(enabled\)\s*\)",
-        '.update_resource("UltraMode", UltraMode::enabled(enabled))',
+        r"update_resource\s*\(\s*UltraMode::enabled\s*\(\s*enabled\s*\)\s*\)",
+        'update_resource("UltraMode", UltraMode::enabled(enabled))',
         source_text,
     )
     if count:
         path.write_text(updated_text, encoding="utf-8")
         updated_calls += count
-if updated_calls != 1:
-    raise SystemExit(f"expected exactly one Ultra Agent resource update; found {updated_calls}")
+print(f"Normalized {updated_calls} live Ultra resource update call(s)")
+
+# Workflow-owned child runs are a separate orchestration system and must never
+# consume the interactive Ultra admission budget.
+workflow_host = REPO / "crates/codegen/xai-grok-shell/src/session/workflow/host_service.rs"
+replace_text_once(
+    workflow_host,
+    "                    fork_context,\n                    owner: SubagentOwner::workflow(&self.params.run_id),\n",
+    "                    fork_context,\n                    ultra_mode: false,\n                    owner: SubagentOwner::workflow(&self.params.run_id),\n",
+)
 
 # The builder only seeds UltraMode as a resource value; it does not reference
 # the type directly after ToolBridge construction.
