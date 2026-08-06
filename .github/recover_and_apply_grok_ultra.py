@@ -133,8 +133,6 @@ replace_once(
 /// Parse the per-model''',
 )
 
-# The focused test enforces the ownership boundary rather than mutating the
-# generic provider parser to manufacture a client-only menu row.
 ultra_test = REPO / "crates/codegen/xai-grok-sampling-types/tests/ultra.rs"
 replace_once(
     ultra_test,
@@ -149,8 +147,7 @@ fn provider_effort_metadata_remains_unmodified_by_client_ultra() {
 ''',
 )
 
-# Register the live session marker through Grok Build's canonical resource
-# registry so it can be queried by TaskTool and replaced at runtime.
+# Register the live session marker through Grok Build's canonical resource registry.
 task_types = REPO / "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs"
 replace_text_once(
     task_types,
@@ -161,8 +158,7 @@ register_resource!("grok_build", "UltraMode", UltraMode);
 ''',
 )
 
-# Session switching belongs at the Agent boundary. Depending on formatting,
-# normalize a one-argument update call to the registered two-argument form.
+# Normalize a one-argument resource update if the generated implementation has one.
 shell_src = REPO / "crates/codegen/xai-grok-shell/src"
 updated_calls = 0
 for path in shell_src.rglob("*.rs"):
@@ -186,13 +182,12 @@ replace_text_once(
     "                    fork_context,\n                    ultra_mode: false,\n                    owner: SubagentOwner::workflow(&self.params.run_id),\n",
 )
 
-# The builder only seeds UltraMode as a resource value; it does not reference
-# the type directly after ToolBridge construction.
+# Optional cleanup only; the generated source may already omit this import.
 builder_path = REPO / "crates/codegen/xai-grok-agent/src/builder.rs"
 builder_text = builder_path.read_text(encoding="utf-8")
 builder_text, removed = re.subn(r"\bUltraMode,\s*", "", builder_text)
-if removed != 1:
-    raise SystemExit(f"expected exactly one unused UltraMode builder import; found {removed}")
-builder_path.write_text(builder_text, encoding="utf-8")
+if removed:
+    builder_path.write_text(builder_text, encoding="utf-8")
+print(f"Removed {removed} optional UltraMode builder import(s)")
 
 print("Normalized client-owned Ultra semantics and session resource wiring")
