@@ -80,7 +80,26 @@ jobs:
           done
 
       - name: Apply the upstream-oriented source refactor
-        run: python .github/refactor_grok_ultra.py
+        run: |
+          python .github/refactor_grok_ultra.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/codegen/xai-grok-agent/src/config.rs")
+          text = path.read_text(encoding="utf-8")
+          old = """            BuiltinAgentName::GrokBuild
+                      | BuiltinAgentName::GrokBuildConcise
+          """
+          new = """            BuiltinAgentName::GrokBuild
+                      | BuiltinAgentName::GrokBuildUltra
+                      | BuiltinAgentName::GrokBuildConcise
+          """
+          if text.count(old) != 1:
+              raise SystemExit(
+                  "expected exactly one strict-harness classification insertion point"
+              )
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
 
       - name: Install DotSlash
         run: command -v dotslash >/dev/null || cargo install dotslash --locked
