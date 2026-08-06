@@ -60,7 +60,7 @@ jobs:
           mkdir -p export/codex/codex-rs/tui/src/chatwidget
           mkdir -p export/codex/codex-rs/app-server-protocol/src/protocol/v2
           cp -R codex/codex-rs/core/src/agent export/codex/codex-rs/core/src/
-          cp -R codex/codex-rs/core/src/agent_communication export/codex/codex-rs/core/src/
+          cp -R codex/codex-rs/core/src/agent_communication* export/codex/codex-rs/core/src/
           cp -R codex/codex-rs/core/src/tools/handlers/multi_agents* export/codex/codex-rs/core/src/tools/handlers/
           cp codex/codex-rs/core/src/tools/spec_plan.rs export/codex/codex-rs/core/src/tools/
           cp codex/codex-rs/core/src/session/multi_agents.rs export/codex/codex-rs/core/src/session/
