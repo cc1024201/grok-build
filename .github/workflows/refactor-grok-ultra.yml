@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 120
     env:
       BASELINE: a5589e958437d79e13db026eedcb1720bffd4063
+      BASELINE_IMAGE_TEST: crates/codegen/xai-grok-shell/src/session/acp_session_tests/tool_layer_images_bridge_tests.rs
     steps:
       - name: Check out feature branch
         uses: actions/checkout@v4
@@ -57,6 +58,7 @@ jobs:
             crates/codegen/xai-grok-shell/src/agent/session_config.rs
             crates/codegen/xai-grok-shell/src/agent/subagent/tests/mod.rs
             crates/codegen/xai-grok-shell/src/session/acp_session_impl/reminders.rs
+            crates/codegen/xai-grok-shell/src/session/acp_session_tests/tool_layer_images_bridge_tests.rs
             crates/codegen/xai-grok-shell/src/session/goal_classifier.rs
             crates/codegen/xai-grok-shell/src/session/goal_planner.rs
             crates/codegen/xai-grok-shell/src/session/goal_strategist.rs
@@ -99,6 +101,23 @@ jobs:
                   "expected exactly one strict-harness classification insertion point"
               )
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Apply a test-only compatibility shim for the upstream baseline
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["BASELINE_IMAGE_TEST"])
+          text = path.read_text(encoding="utf-8")
+          marker = "use super::*;\n"
+          insertion = marker + "use base64::Engine as _;\n"
+          if "use base64::Engine" in text:
+              raise SystemExit("the upstream baseline no longer needs the base64 Engine shim")
+          if text.count(marker) != 1:
+              raise SystemExit("unexpected upstream image-test import layout")
+          path.write_text(text.replace(marker, insertion, 1), encoding="utf-8")
           PY
 
       - name: Install DotSlash
@@ -157,6 +176,7 @@ jobs:
         run: |
           rm .github/refactor_grok_ultra.py
           rm .github/workflows/refactor-grok-ultra.yml
+          git restore --source="$BASELINE" --staged --worktree -- "$BASELINE_IMAGE_TEST"
           python - <<'PY'
           from pathlib import Path
           import subprocess
@@ -176,6 +196,7 @@ jobs:
               path.write_bytes(data.rstrip(b"\r\n") + b"\n")
           PY
           git diff --check
+          git diff --quiet "$BASELINE" -- "$BASELINE_IMAGE_TEST"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
