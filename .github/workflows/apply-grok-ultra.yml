@@ -41,12 +41,13 @@ jobs:
             ~/.cargo/git/db
             target
           key: grok-ultra-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-
-      - name: Install DotSlash
-        run: command -v dotslash >/dev/null || cargo install dotslash --locked
+          save-always: true
 
       - name: Apply Ultra source changes
         run: python .github/recover_and_apply_grok_ultra.py
+
+      - name: Install DotSlash
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
 
       - name: Format Rust sources
         run: cargo fmt --all
