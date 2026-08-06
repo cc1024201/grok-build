@@ -80,7 +80,7 @@ replace_once(
             return None;
         }
     };
-    match s.parse() {
+    match s.parse::<ReasoningEffort>() {
         Ok(effort) if effort.is_ultra() => {
             tracing::warn!(
                 value = %s,
