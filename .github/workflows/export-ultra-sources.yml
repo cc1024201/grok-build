@@ -1,0 +1,81 @@
+name: Export Ultra implementation sources
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-selfuse
+    paths:
+      - .github/workflows/export-ultra-sources.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out Grok Build fork
+        uses: actions/checkout@v4
+        with:
+          path: grok-build
+          fetch-depth: 1
+
+      - name: Check out Codex reference
+        uses: actions/checkout@v4
+        with:
+          repository: openai/codex
+          ref: e1831db7c31ec3ec3a88f29e95cc336858038bad
+          path: codex
+          fetch-depth: 1
+
+      - name: Collect source trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p export/grok-build export/codex
+
+          cp grok-build/Cargo.toml grok-build/Cargo.lock grok-build/rust-toolchain.toml export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-agent export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-shell export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-tools export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-pager export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-pager-bin export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-sampling-types export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-models export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-config export/grok-build/
+          cp -R grok-build/crates/codegen/xai-grok-config-types export/grok-build/
+          cp -R grok-build/crates/common/xai-tool-types export/grok-build/
+
+          mkdir -p export/codex/codex-rs/core/src/tools/handlers
+          mkdir -p export/codex/codex-rs/core/src/session
+          mkdir -p export/codex/codex-rs/protocol/src
+          mkdir -p export/codex/codex-rs/tui/src/bottom_pane
+          mkdir -p export/codex/codex-rs/tui/src/chatwidget
+          mkdir -p export/codex/codex-rs/app-server-protocol/src/protocol/v2
+          cp -R codex/codex-rs/core/src/agent export/codex/codex-rs/core/src/
+          cp -R codex/codex-rs/core/src/agent_communication export/codex/codex-rs/core/src/
+          cp -R codex/codex-rs/core/src/tools/handlers/multi_agents* export/codex/codex-rs/core/src/tools/handlers/
+          cp codex/codex-rs/core/src/tools/spec_plan.rs export/codex/codex-rs/core/src/tools/
+          cp codex/codex-rs/core/src/session/multi_agents.rs export/codex/codex-rs/core/src/session/
+          cp codex/codex-rs/core/src/client.rs export/codex/codex-rs/core/src/
+          cp codex/codex-rs/core/src/config/mod.rs export/codex/codex-rs/core/src/config.rs
+          cp codex/codex-rs/protocol/src/openai_models.rs export/codex/codex-rs/protocol/src/
+          cp codex/codex-rs/tui/src/bottom_pane/effort_ignition.rs export/codex/codex-rs/tui/src/bottom_pane/
+          cp codex/codex-rs/tui/src/bottom_pane/effort_status_line.rs export/codex/codex-rs/tui/src/bottom_pane/
+          cp codex/codex-rs/tui/src/chatwidget/reasoning_shortcuts.rs export/codex/codex-rs/tui/src/chatwidget/
+          cp codex/codex-rs/tui/src/chatwidget/model_popups.rs export/codex/codex-rs/tui/src/chatwidget/
+          cp codex/codex-rs/app-server-protocol/src/protocol/v2/thread.rs export/codex/codex-rs/app-server-protocol/src/protocol/v2/
+          cp codex/codex-rs/app-server-protocol/src/protocol/v2/turn.rs export/codex/codex-rs/app-server-protocol/src/protocol/v2/
+
+          printf '%s\n' 'e1831db7c31ec3ec3a88f29e95cc336858038bad' > export/codex/CODEX_REFERENCE_COMMIT
+          tar -C export -czf ultra-sources.tar.gz grok-build codex
+
+      - name: Upload source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultra-sources
+          path: ultra-sources.tar.gz
+          if-no-files-found: error
+          retention-days: 3
