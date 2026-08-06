@@ -161,15 +161,15 @@ register_resource!("grok_build", "UltraMode", UltraMode);
 ''',
 )
 
-# Session switching belongs at the Agent boundary. Agent::update_resource owns
-# the conversion into the finalized ToolBridge's closure-based mutation API.
+# Session switching belongs at the Agent boundary. The generated Agent helper
+# requires the registered resource name plus the new value.
 shell_src = REPO / "crates/codegen/xai-grok-shell/src"
 updated_calls = 0
 for path in shell_src.rglob("*.rs"):
     source_text = path.read_text(encoding="utf-8")
     updated_text, count = re.subn(
-        r"\.tool_bridge\(\)\s*\.update_resource\(\s*UltraMode::enabled\(enabled\)\s*\)",
-        ".update_resource(UltraMode::enabled(enabled))",
+        r"\.update_resource\(\s*UltraMode::enabled\(enabled\)\s*\)",
+        '.update_resource("UltraMode", UltraMode::enabled(enabled))',
         source_text,
     )
     if count:
