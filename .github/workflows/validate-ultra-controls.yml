@@ -53,6 +53,39 @@ jobs:
       - name: Apply verified collaboration controls
         run: python .github/apply-ultra-controls.py
 
+      - name: Bridge control tools through unified I/O
+        run: |
+          cat >> crates/codegen/xai-grok-tools/src/implementations/grok_build/agent_control.rs <<'RS'
+
+          macro_rules! dynamic_tool_io {
+              ($input:ty, $output:ty) => {
+                  impl From<$input> for crate::types::tool_io::ToolInput {
+                      fn from(value: $input) -> Self {
+                          Self::Dynamic(
+                              serde_json::to_value(value)
+                                  .expect("Ultra control input must serialize"),
+                          )
+                      }
+                  }
+
+                  impl From<$output> for crate::types::output::ToolOutput {
+                      fn from(value: $output) -> Self {
+                          Self::Dynamic(
+                              serde_json::to_value(value)
+                                  .expect("Ultra control output must serialize")
+                                  .into(),
+                          )
+                      }
+                  }
+              };
+          }
+
+          dynamic_tool_io!(ListAgentsInput, ListAgentsOutput);
+          dynamic_tool_io!(SendMessageInput, SendMessageOutput);
+          dynamic_tool_io!(FollowupTaskInput, FollowupTaskOutput);
+          dynamic_tool_io!(InterruptAgentInput, InterruptAgentOutput);
+          RS
+
       - name: Install DotSlash
         run: command -v dotslash >/dev/null || cargo install dotslash --locked
 
