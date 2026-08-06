@@ -6,6 +6,7 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - .github/apply_grok_ultra.py
+      - .github/recover_and_apply_grok_ultra.py
       - .github/workflows/apply-grok-ultra.yml
 
 permissions:
@@ -34,7 +35,7 @@ jobs:
         run: cargo install dotslash --locked
 
       - name: Apply Ultra source changes
-        run: python .github/apply_grok_ultra.py
+        run: python .github/recover_and_apply_grok_ultra.py
 
       - name: Format Rust sources
         run: cargo fmt --all
@@ -59,6 +60,7 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           rm .github/apply_grok_ultra.py
+          rm .github/recover_and_apply_grok_ultra.py
           rm .github/workflows/apply-grok-ultra.yml
           git diff --check
           git config user.name "github-actions[bot]"
