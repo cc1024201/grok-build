@@ -7,6 +7,12 @@ on:
     paths:
       - .github/ultra-core.patch
       - .github/workflows/export-ultra-sources.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/ultra-core.patch
+      - .github/workflows/export-ultra-sources.yml
   workflow_dispatch:
 
 permissions:
