@@ -117,21 +117,21 @@ jobs:
           ! git grep -n 'ReasoningEffort::Ultra\|ultra_mode' -- '*.rs'
 
       - name: Test Ultra agent-profile invariants
-        run: cargo test -p xai-grok-agent grok_build_ultra_is_a_full_tool_execution_profile
+        run: cargo test -p xai-grok-agent --lib grok_build_ultra_is_a_full_tool_execution_profile
 
       - name: Test profile-to-session policy resolution
-        run: cargo test -p xai-grok-shell subagent_execution_policy_is_opt_in_to_ultra
+        run: cargo test -p xai-grok-shell --lib subagent_execution_policy_is_opt_in_to_ultra
 
       - name: Test policy propagation and truthful admission reporting
         run: |
-          cargo test -p xai-grok-tools execution_policy_forks_context_and_waits_for_admission
-          cargo test -p xai-grok-tools background_admission_rejection_is_returned_to_the_model
+          cargo test -p xai-grok-tools --lib execution_policy_forks_context_and_waits_for_admission
+          cargo test -p xai-grok-tools --lib background_admission_rejection_is_returned_to_the_model
 
       - name: Test atomic coordinator admission
-        run: cargo test -p xai-grok-tools execution_policy_admission_is_atomic_under_concurrent_spawns
+        run: cargo test -p xai-grok-tools --lib execution_policy_admission_is_atomic_under_concurrent_spawns
 
       - name: Test background admission lifecycle
-        run: cargo test -p xai-grok-tools task_background_spawn_returns_an_admission_ack_before_completion
+        run: cargo test -p xai-grok-tools --lib task_background_spawn_returns_an_admission_ack_before_completion
 
       - name: Test agent definitions
         run: cargo test -p xai-grok-agent
