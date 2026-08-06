@@ -13,12 +13,14 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use super::types::{
-    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentCancelOutcome,
-    SubagentCancelRequest, SubagentCancelTarget, SubagentDescribeOutcome, SubagentDescribeRequest,
-    SubagentEvent, SubagentInspectRequest, SubagentInspection, SubagentListRunningRequest,
-    SubagentQueryRequest, SubagentRegistryCounts, SubagentRegistryCountsRequest, SubagentRequest,
-    SubagentResult, SubagentSnapshot, SubagentSpawnRequest, SubagentSpawnedRefsRequest,
-    SubagentValidateTypeOutcome, SubagentValidateTypeRequest,
+    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentAgentSummary,
+    SubagentCancelOutcome, SubagentCancelRequest, SubagentCancelTarget, SubagentDescribeOutcome,
+    SubagentDescribeRequest, SubagentEvent, SubagentInspectRequest, SubagentInspection,
+    SubagentListAgentsRequest, SubagentListRunningRequest, SubagentMessageOutcome,
+    SubagentMessageRequest, SubagentQueryRequest, SubagentRegistryCounts,
+    SubagentRegistryCountsRequest, SubagentRequest, SubagentResult, SubagentSnapshot,
+    SubagentSpawnRequest, SubagentSpawnedRefsRequest, SubagentValidateTypeOutcome,
+    SubagentValidateTypeRequest,
 };
 use crate::register_resource;
 use xai_tool_runtime::ToolError;
@@ -43,6 +45,13 @@ pub trait SubagentBackend: Send + Sync + 'static {
         &self,
         request: SubagentRequest,
     ) -> Result<SubagentAdmission, ToolError>;
+
+    /// List all interactive children owned by this parent session without
+    /// loading completed output bodies.
+    async fn list_agents(&self) -> Vec<SubagentAgentSummary>;
+
+    /// Queue a message into a currently-running child.
+    async fn send_message(&self, target: &str, message: String) -> SubagentMessageOutcome;
 
     /// Query the current state of a subagent by ID.
     ///
@@ -380,6 +389,46 @@ impl SubagentBackend for ChannelBackend {
                 }),
             )),
         }
+    }
+
+    async fn list_agents(&self) -> Vec<SubagentAgentSummary> {
+        let Some(parent_session_id) = self.parent_session_id() else {
+            return Vec::new();
+        };
+        let (respond_to, response_rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SubagentEvent::ListAgents(SubagentListAgentsRequest {
+                parent_session_id,
+                respond_to,
+            }))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        response_rx.await.unwrap_or_default()
+    }
+
+    async fn send_message(&self, target: &str, message: String) -> SubagentMessageOutcome {
+        let Some(parent_session_id) = self.parent_session_id() else {
+            return SubagentMessageOutcome::Unavailable;
+        };
+        let (respond_to, response_rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SubagentEvent::Message(SubagentMessageRequest {
+                subagent_id: target.to_owned(),
+                parent_session_id,
+                message,
+                respond_to,
+            }))
+            .is_err()
+        {
+            return SubagentMessageOutcome::Unavailable;
+        }
+        response_rx
+            .await
+            .unwrap_or(SubagentMessageOutcome::Unavailable)
     }
 
     async fn query(

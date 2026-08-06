@@ -38,6 +38,12 @@ pub trait ChildControl: 'static {
 
     fn progress(&self) -> Self::ProgressFuture;
     fn cancel(&self);
+
+    /// Queue a parent message into the child's live turn. Runtimes without a
+    /// live messaging channel leave the default `false` implementation.
+    fn send_message(&self, _message: String) -> bool {
+        false
+    }
 }
 
 /// Data reported when runtime initialization has produced a live child.

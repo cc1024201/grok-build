@@ -25,10 +25,11 @@ use super::coordinator_state::{
     completion_summary, sleep_until, workflow_outstanding,
 };
 use super::types::{
-    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentCancelOutcome,
-    SubagentCancelTarget, SubagentDescribeOutcome, SubagentEvent, SubagentOutstandingReply,
-    SubagentOwner, SubagentRegistryCounts, SubagentRequest, SubagentResult, SubagentResumeLookup,
-    SubagentResumeSource, SubagentSpawnRequest, SubagentValidateTypeOutcome,
+    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentAgentSummary,
+    SubagentCancelOutcome, SubagentCancelTarget, SubagentDescribeOutcome, SubagentEvent,
+    SubagentMessageOutcome, SubagentOutstandingReply, SubagentOwner, SubagentRegistryCounts,
+    SubagentRequest, SubagentResult, SubagentResumeLookup, SubagentResumeSource,
+    SubagentSpawnRequest, SubagentValidateTypeOutcome,
 };
 
 pub use super::coordinator_state::{
@@ -387,6 +388,87 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             }
             SubagentEvent::ListRunning(request) => {
                 self.handle_list_running(request.parent_session_id, request.respond_to);
+            }
+            SubagentEvent::ListAgents(request) => {
+                let mut agents: Vec<_> = self
+                    .pending
+                    .values()
+                    .filter(|child| {
+                        child.request.parent_session_id == request.parent_session_id
+                            && !child.request.owner.is_workflow()
+                    })
+                    .map(|child| SubagentAgentSummary {
+                        subagent_id: child.request.id.clone(),
+                        subagent_type: child.request.subagent_type.clone(),
+                        description: child.request.description.clone(),
+                        status: "initializing".to_string(),
+                        duration_ms: child.started_at.elapsed().as_millis() as u64,
+                        resumed_from: child.request.resume_from.clone(),
+                    })
+                    .chain(
+                        self.active
+                            .values()
+                            .filter(|child| {
+                                child.request.parent_session_id == request.parent_session_id
+                                    && !child.request.owner.is_workflow()
+                            })
+                            .map(|child| SubagentAgentSummary {
+                                subagent_id: child.request.id.clone(),
+                                subagent_type: child.request.subagent_type.clone(),
+                                description: child.request.description.clone(),
+                                status: "running".to_string(),
+                                duration_ms: child.started_at.elapsed().as_millis() as u64,
+                                resumed_from: child.resumed_from.clone(),
+                            }),
+                    )
+                    .chain(
+                        self.completed
+                            .values()
+                            .filter(|child| {
+                                child.request.parent_session_id == request.parent_session_id
+                                    && !child.request.owner.is_workflow()
+                            })
+                            .map(|child| SubagentAgentSummary {
+                                subagent_id: child.request.id.clone(),
+                                subagent_type: child.request.subagent_type.clone(),
+                                description: child.request.description.clone(),
+                                status: child.result.status().to_string(),
+                                duration_ms: child.result.duration_ms,
+                                resumed_from: child.resumed_from.clone(),
+                            }),
+                    )
+                    .collect();
+                agents.sort_by(|left, right| left.subagent_id.cmp(&right.subagent_id));
+                let _ = request.respond_to.send(agents);
+            }
+            SubagentEvent::Message(request) => {
+                let outcome = if let Some(child) = self.active.get(&request.subagent_id)
+                    && child.request.parent_session_id == request.parent_session_id
+                    && !child.request.owner.is_workflow()
+                {
+                    if child.control.send_message(request.message) {
+                        SubagentMessageOutcome::Delivered
+                    } else {
+                        SubagentMessageOutcome::Unavailable
+                    }
+                } else if self.pending.get(&request.subagent_id).is_some_and(|child| {
+                    child.request.parent_session_id == request.parent_session_id
+                        && !child.request.owner.is_workflow()
+                }) {
+                    SubagentMessageOutcome::Initializing
+                } else if self
+                    .completed
+                    .get(&request.subagent_id)
+                    .is_some_and(|child| {
+                        child.request.parent_session_id == request.parent_session_id
+                            && !child.request.owner.is_workflow()
+                    })
+                {
+                    SubagentMessageOutcome::Completed
+                } else {
+                    SubagentMessageOutcome::NotFound
+                };
+                let _ = request.respond_to.send(outcome);
             }
             SubagentEvent::Completions(request) => {
                 let (owned, foreign): (Vec<_>, Vec<_>) =

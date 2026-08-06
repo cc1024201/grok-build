@@ -105,9 +105,11 @@ or duplicate work.
 You remain the primary agent: keep advancing the critical path while background children run, \
 inspect their evidence, reconcile disagreements, and own the final implementation and verification. \
 Give each child a clear, non-overlapping deliverable, relevant context, and acceptance criteria. \
-For concurrent edits, assign disjoint files/modules or use isolated worktrees. Wait for every child \
-whose result is required for correctness before answering, then present one integrated result rather \
-than a collection of agent reports.";
+For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use `list_agents` \
+to inspect the roster, `send_message` to steer a running child, `followup_task` to continue a \
+completed child, and `interrupt_agent` to stop a wrong direction without losing its resumable \
+conversation. Wait for every child whose result is required for correctness before answering, then \
+present one integrated result rather than a collection of agent reports.";
 
 /// Orchestrator-specific prompt body appended to the standard GrokBuild
 /// system prompt (`prompt.md`). Instructs the GBL model to delegate
@@ -185,6 +187,18 @@ fn wait_tasks_tool_config() -> ToolConfig {
 fn kill_task_tool_config() -> ToolConfig {
     ToolConfig::from(&grok_build::KillTaskTool).with_name("kill_command_or_subagent")
 }
+fn list_agents_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::ListAgentsTool).with_name("list_agents")
+}
+fn send_message_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::SendMessageTool).with_name("send_message")
+}
+fn followup_task_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::FollowupTaskTool).with_name("followup_task")
+}
+fn interrupt_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::InterruptAgentTool).with_name("interrupt_agent")
+}
 /// Complete workspace-executable toolset for hub registration.
 ///
 /// Extends `default_grok_build_toolset()` with tools that are dynamically
@@ -205,6 +219,10 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
     tools.push((&grok_build::LspTool).into());
+    tools.push(list_agents_tool_config());
+    tools.push(send_message_tool_config());
+    tools.push(followup_task_tool_config());
+    tools.push(interrupt_agent_tool_config());
     ToolServerConfig {
         tools,
         behavior_preset: None,
@@ -302,6 +320,16 @@ fn default_grok_build_toolset() -> ToolServerConfig {
         ],
         behavior_preset: None,
     }
+}
+fn grok_build_ultra_toolset() -> ToolServerConfig {
+    let mut config = default_grok_build_toolset();
+    config.tools.extend([
+        list_agents_tool_config(),
+        send_message_tool_config(),
+        followup_task_tool_config(),
+        interrupt_agent_tool_config(),
+    ]);
+    config
 }
 fn grok_build_concise_toolset() -> ToolServerConfig {
     ToolServerConfig {
@@ -1556,6 +1584,7 @@ impl AgentDefinition {
     pub fn grok_build_ultra() -> Self {
         Self {
             prompt_body: Some(ULTRA_PROMPT_BODY.to_string()),
+            tool_config: grok_build_ultra_toolset(),
             subagent_execution:
                 xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra(),
             ..Self::base(
@@ -1883,7 +1912,22 @@ mod tests {
             .map(|tool| tool.id.as_str())
             .collect();
 
-        assert_eq!(ultra_tools, normal_tools);
+        assert!(normal_tools.iter().all(|id| ultra_tools.contains(id)));
+        for control in [
+            ToolConfig::from(&grok_build::ListAgentsTool).id,
+            ToolConfig::from(&grok_build::SendMessageTool).id,
+            ToolConfig::from(&grok_build::FollowupTaskTool).id,
+            ToolConfig::from(&grok_build::InterruptAgentTool).id,
+        ] {
+            assert!(
+                ultra_tools.contains(&control.as_str()),
+                "Ultra toolset must include `{control}`"
+            );
+            assert!(
+                !normal_tools.contains(&control.as_str()),
+                "normal Grok Build must not expose Ultra-only `{control}`"
+            );
+        }
         assert_eq!(
             normal.subagent_execution,
             xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::default()

@@ -468,6 +468,17 @@ impl ChildControl for ShellChildRuntime {
             crate::session::ShutdownKind::Graceful,
         ));
     }
+
+    fn send_message(&self, message: String) -> bool {
+        self.child_handle
+            .cmd_tx
+            .send(SessionCommand::Interject {
+                text: message,
+                id: None,
+                images: Vec::new(),
+            })
+            .is_ok()
+    }
 }
 #[derive(Default)]
 pub(crate) struct ShellCompletionData {

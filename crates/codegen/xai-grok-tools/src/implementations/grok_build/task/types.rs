@@ -760,6 +760,46 @@ pub struct SubagentListRunningRequest {
     pub respond_to: oneshot::Sender<Vec<SubagentInspection>>,
 }
 
+/// Lightweight model-facing roster entry. Unlike [`SubagentInspection`], this
+/// never loads or embeds a completed child's potentially large final output.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SubagentAgentSummary {
+    pub subagent_id: String,
+    pub subagent_type: String,
+    pub description: String,
+    pub status: String,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<String>,
+}
+
+#[derive(Educe)]
+#[educe(Debug)]
+pub struct SubagentListAgentsRequest {
+    pub parent_session_id: String,
+    #[educe(Debug(ignore))]
+    pub respond_to: oneshot::Sender<Vec<SubagentAgentSummary>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentMessageOutcome {
+    Delivered,
+    Initializing,
+    Completed,
+    NotFound,
+    Unavailable,
+}
+
+#[derive(Educe)]
+#[educe(Debug)]
+pub struct SubagentMessageRequest {
+    pub subagent_id: String,
+    pub parent_session_id: String,
+    pub message: String,
+    #[educe(Debug(ignore))]
+    pub respond_to: oneshot::Sender<SubagentMessageOutcome>,
+}
+
 /// Fork/resume provenance retained by the shared coordinator.
 #[derive(Debug, Clone, Default)]
 pub struct SubagentProvenance {
@@ -916,6 +956,8 @@ pub enum SubagentEvent {
     Cancel(SubagentCancelRequest),
     ListActive(SubagentListActiveRequest),
     ListRunning(SubagentListRunningRequest),
+    ListAgents(SubagentListAgentsRequest),
+    Message(SubagentMessageRequest),
     Completions(SubagentCompletionsRequest),
     /// Discard a closed session's buffered completions and cancel its children.
     TeardownSession {
