@@ -12,6 +12,7 @@ on:
       - scripts/build-grok-ultra.ps1
       - scripts/install-grok-ultra.ps1
       - scripts/uninstall-grok-ultra.ps1
+      - scripts/test-grok-ultra-isolation.ps1
       - docs/grok-ultra-isolation.md
       - .github/workflows/validate-grok-ultra-isolation.yml
       - crates/codegen/xai-grok-agent/**
@@ -33,6 +34,7 @@ on:
       - scripts/build-grok-ultra.ps1
       - scripts/install-grok-ultra.ps1
       - scripts/uninstall-grok-ultra.ps1
+      - scripts/test-grok-ultra-isolation.ps1
       - docs/grok-ultra-isolation.md
       - .github/workflows/validate-grok-ultra-isolation.yml
   workflow_dispatch:
@@ -113,14 +115,15 @@ jobs:
           ref: agent/grok-ultra-selfuse
           fetch-depth: 1
 
-      - name: Parse PowerShell installers
+      - name: Parse PowerShell installers and tests
         shell: pwsh
         run: |
           $failed = $false
           foreach ($path in @(
             'scripts/build-grok-ultra.ps1',
             'scripts/install-grok-ultra.ps1',
-            'scripts/uninstall-grok-ultra.ps1'
+            'scripts/uninstall-grok-ultra.ps1',
+            'scripts/test-grok-ultra-isolation.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -136,70 +139,4 @@ jobs:
 
       - name: Exercise generated cmd launcher
         shell: pwsh
-        run: |
-          $source = Get-Content scripts/build-grok-ultra.ps1 -Raw
-          $pattern = '(?s)\$Launcher = @''\r?\n(.*?)\r?\n''@'
-          $match = [regex]::Match($source, $pattern)
-          if (-not $match.Success) { throw 'Unable to extract grok-ultra.cmd launcher template' }
-
-          $root = Join-Path $env:RUNNER_TEMP 'grok-ultra-launcher-test'
-          $bin = Join-Path $root 'bin'
-          $libexec = Join-Path $root 'libexec'
-          New-Item $bin -ItemType Directory -Force | Out-Null
-          New-Item $libexec -ItemType Directory -Force | Out-Null
-          Set-Content (Join-Path $bin 'grok-ultra.cmd') $match.Groups[1].Value -Encoding Ascii
-          Copy-Item $env:ComSpec (Join-Path $libexec 'grok-ultra-core.exe')
-          $launcher = Join-Path $bin 'grok-ultra.cmd'
-
-          function Invoke-Launcher([string[]]$LauncherArgs) {
-            $token = [Guid]::NewGuid().ToString('N')
-            $stdoutPath = Join-Path $root "$token.stdout"
-            $stderrPath = Join-Path $root "$token.stderr"
-            $commandLine = '"' + $launcher + '" ' + ($LauncherArgs -join ' ')
-            $process = Start-Process -FilePath $env:ComSpec \
-              -ArgumentList @('/d', '/c', $commandLine) \
-              -Wait -PassThru -NoNewWindow \
-              -RedirectStandardOutput $stdoutPath \
-              -RedirectStandardError $stderrPath
-            [pscustomobject]@{
-              ExitCode = $process.ExitCode
-              Stdout = if (Test-Path $stdoutPath) { Get-Content $stdoutPath -Raw } else { '' }
-              Stderr = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
-            }
-          }
-
-          $env:GROK_HOME = 'C:\official-grok'
-          $env:GROK_AUTH_PATH = 'C:\official-grok\auth.json'
-          $env:GROK_LEADER_SOCKET = 'C:\official-grok\leader.sock'
-          $env:GROK_SESSION_PATH = 'C:\official-grok\session.json'
-          Remove-Item Env:GROK_ULTRA_HOME -ErrorAction SilentlyContinue
-          Remove-Item Env:GROK_ULTRA_AUTH_PATH -ErrorAction SilentlyContinue
-
-          $normal = Invoke-Launcher @('/c', 'set', 'GROK_')
-          Write-Host $normal.Stdout
-          if ($normal.ExitCode -ne 0) {
-            throw "launcher failed: $($normal.ExitCode)`nstdout:`n$($normal.Stdout)`nstderr:`n$($normal.Stderr)"
-          }
-          $expectedHome = Join-Path $env:USERPROFILE '.grok-ultra'
-          if ($normal.Stdout -notmatch [regex]::Escape("GROK_HOME=$expectedHome")) {
-            throw "isolated home missing:`n$($normal.Stdout)"
-          }
-          if ($normal.Stdout -notmatch [regex]::Escape("GROK_AUTH_PATH=$expectedHome\auth.json")) {
-            throw "isolated auth path missing:`n$($normal.Stdout)"
-          }
-          if ($normal.Stdout -notmatch 'GROK_AGENT=grok-build-ultra') { throw $normal.Stdout }
-          if ($normal.Stdout -notmatch 'GROK_DISABLE_AUTOUPDATER=1') { throw $normal.Stdout }
-          if ($normal.Stdout -match 'C:\\official-grok\\leader.sock|C:\\official-grok\\session.json') {
-            throw "official leader/session leaked:`n$($normal.Stdout)"
-          }
-
-          $update = Invoke-Launcher @('update')
-          if ($update.ExitCode -ne 2) {
-            throw "update command was not refused: $($update.ExitCode)`n$($update.Stderr)"
-          }
-
-          $env:GROK_ULTRA_HOME = Join-Path $env:USERPROFILE '.grok'
-          $officialHome = Invoke-Launcher @('/c', 'exit', '0')
-          if ($officialHome.ExitCode -ne 2) {
-            throw "official state root was not refused: $($officialHome.ExitCode)`n$($officialHome.Stderr)"
-          }
+        run: .\scripts\test-grok-ultra-isolation.ps1
