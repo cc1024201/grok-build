@@ -1,0 +1,134 @@
+name: Validate isolated Grok Ultra distribution
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-selfuse
+    paths:
+      - scripts/build-grok-ultra.sh
+      - scripts/install-grok-ultra.sh
+      - scripts/uninstall-grok-ultra.sh
+      - scripts/test-grok-ultra-isolation.sh
+      - scripts/build-grok-ultra.ps1
+      - scripts/install-grok-ultra.ps1
+      - scripts/uninstall-grok-ultra.ps1
+      - docs/grok-ultra-isolation.md
+      - .github/workflows/validate-grok-ultra-isolation.yml
+      - crates/codegen/xai-grok-agent/**
+      - crates/codegen/xai-grok-shell/**
+      - crates/codegen/xai-grok-tools/**
+      - crates/codegen/xai-grok-pager/**
+      - crates/codegen/xai-grok-pager-bin/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/build-grok-ultra.sh
+      - scripts/install-grok-ultra.sh
+      - scripts/uninstall-grok-ultra.sh
+      - scripts/test-grok-ultra-isolation.sh
+      - scripts/build-grok-ultra.ps1
+      - scripts/install-grok-ultra.ps1
+      - scripts/uninstall-grok-ultra.ps1
+      - docs/grok-ultra-isolation.md
+      - .github/workflows/validate-grok-ultra-isolation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-isolation-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-selfuse
+          fetch-depth: 1
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/build-grok-ultra.sh
+          bash -n scripts/install-grok-ultra.sh
+          bash -n scripts/uninstall-grok-ultra.sh
+          bash -n scripts/test-grok-ultra-isolation.sh
+          bash scripts/test-grok-ultra-isolation.sh
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: grok-ultra-isolated-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            grok-ultra-final-${{ runner.os }}-
+            grok-ultra-v2-surface-${{ runner.os }}-
+            grok-ultra-selfuse-${{ runner.os }}-
+
+      - name: Install DotSlash
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
+
+      - name: Build isolated package
+        run: bash scripts/build-grok-ultra.sh
+
+      - name: Smoke test isolated launcher
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$tmp/home" "$tmp/official"
+          printf 'do-not-touch\n' > "$tmp/official/sentinel"
+          HOME="$tmp/home" \
+            GROK_HOME="$tmp/official" \
+            GROK_AUTH_PATH="$tmp/official/auth.json" \
+            dist/grok-ultra-linux-x86_64/bin/grok-ultra --version
+          test "$(cat "$tmp/official/sentinel")" = "do-not-touch"
+          test ! -e "$tmp/official/auth.json"
+          test ! -e "$tmp/home/.grok"
+
+      - name: Upload isolated Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-ultra-linux-x86_64-isolated
+          path: |
+            dist/grok-ultra-linux-x86_64.tar.gz
+            dist/grok-ultra-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-script-parse:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-selfuse
+          fetch-depth: 1
+      - name: Parse PowerShell installers
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @(
+            'scripts/build-grok-ultra.ps1',
+            'scripts/install-grok-ultra.ps1',
+            'scripts/uninstall-grok-ultra.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error "$path failed to parse: $($errors | Out-String)"
+            }
+          }
+          if ($failed) { exit 1 }
