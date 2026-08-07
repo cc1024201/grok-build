@@ -81,6 +81,11 @@ jobs:
       - name: Build isolated package
         run: bash scripts/build-grok-ultra.sh
 
+      - name: Verify package checksum
+        run: |
+          cd dist
+          sha256sum -c grok-ultra-linux-x86_64.tar.gz.sha256
+
       - name: Smoke test isolated launcher
         run: |
           set -euo pipefail
