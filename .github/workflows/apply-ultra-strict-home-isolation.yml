@@ -1,0 +1,74 @@
+name: Apply strict Grok Ultra home isolation
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-selfuse
+    paths:
+      - .github/apply-ultra-strict-home-isolation.py
+      - .github/workflows/apply-ultra-strict-home-isolation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grok-ultra-strict-home-isolation
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-selfuse
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: grok-ultra-strict-home-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            grok-ultra-isolated-${{ runner.os }}-
+            grok-ultra-final-${{ runner.os }}-
+            grok-ultra-selfuse-${{ runner.os }}-
+
+      - name: Apply strict home isolation source change
+        run: python .github/apply-ultra-strict-home-isolation.py
+
+      - name: Install DotSlash
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
+
+      - name: Format sources
+        run: cargo fmt --all
+
+      - name: Test normal and isolated legacy-agent discovery
+        run: cargo test -p xai-grok-agent --lib user_agent_dirs_
+
+      - name: Check affected runtime
+        run: |
+          cargo check -p xai-grok-agent
+          cargo check -p xai-grok-shell
+          bash scripts/test-grok-ultra-isolation.sh
+
+      - name: Publish real source and remove migration helpers
+        run: |
+          set -euo pipefail
+          rm .github/apply-ultra-strict-home-isolation.py
+          rm .github/workflows/apply-ultra-strict-home-isolation.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: isolate Grok Ultra from legacy official agent catalogs"
+          git push origin HEAD:agent/grok-ultra-selfuse
