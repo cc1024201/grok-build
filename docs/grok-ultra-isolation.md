@@ -12,11 +12,20 @@ The packaged command is `grok-ultra`, never `grok`. Its launcher enforces:
 | Default state root | `~/.grok` | `~/.grok-ultra` |
 | Credentials | `~/.grok/auth.json` | `~/.grok-ultra/auth.json` |
 | Sessions, leader state, logs, memory, worktrees, plugins | below `~/.grok` | below `~/.grok-ultra` |
+| User Agent definitions and bundled Agent cache | `~/.grok/agents`, `~/.grok/bundled/agents` | `~/.grok-ultra/agents`, `~/.grok-ultra/bundled/agents` |
 | Default agent | normal configured agent | `grok-build-ultra` |
 | Auto updater | upstream behavior | disabled |
 | Explicit `update` command | upstream behavior | refused by launcher |
 
-The launcher deliberately overrides ambient `GROK_HOME`, `GROK_AUTH_PATH`, `GROK_LEADER_SOCKET`, and `GROK_SESSION_PATH` values so an existing official-Grok shell environment cannot accidentally reconnect the isolated build to official state.
+The launcher deliberately overrides ambient `GROK_HOME`, `GROK_AUTH_PATH`, `GROK_LEADER_SOCKET`, and `GROK_SESSION_PATH` values so an existing official-Grok shell environment cannot accidentally reconnect the isolated build to official state. It also sets the isolated-distribution marker, which disables upstream's legacy fallback that would otherwise continue reading user Agent definitions from the literal official `~/.grok` tree when `GROK_HOME` points elsewhere.
+
+The launcher rejects:
+
+- `GROK_ULTRA_HOME=~/.grok`;
+- a `GROK_ULTRA_HOME` equal to the ambient official `GROK_HOME`;
+- `GROK_ULTRA_AUTH_PATH=~/.grok/auth.json`;
+- a `GROK_ULTRA_AUTH_PATH` equal to the ambient official `GROK_AUTH_PATH`;
+- the explicit `update` command.
 
 Product-specific overrides are available:
 
@@ -27,6 +36,8 @@ GROK_ULTRA_AGENT=grok-build-ultra grok-ultra
 GROK_ULTRA_LEADER_SOCKET=/absolute/leader.sock grok-ultra
 GROK_ULTRA_SESSION_PATH=/absolute/session.json grok-ultra
 ```
+
+The first run uses a separate credential file and therefore may request login even when official Grok is already authenticated. Logging into the same account is safe; the two token files remain independent. Copying or symlinking the official `auth.json` into the isolated tree is intentionally not part of the installation process.
 
 ## Build and package
 
@@ -59,7 +70,7 @@ The default installation is:
 ~/.grok-ultra/
 ```
 
-No file named `grok` is created, replaced, or removed. `~/.grok` is not used as the global state root by the packaged launcher.
+No file named `grok` is created, replaced, or removed. `~/.grok` is not used as the global state root or legacy user-Agent source by the packaged launcher.
 
 ## Uninstall
 
@@ -71,7 +82,11 @@ The program is removed while isolated state is preserved. Delete `~/.grok-ultra`
 
 ## Project-local compatibility boundary
 
-Repository-owned `.grok/` files remain visible to both builds because they are project configuration committed alongside the code, not installation state. The isolated package does not redirect that namespace. A future strict-project-isolation mode could introduce `.grok-ultra/`, but doing so would intentionally stop inheriting existing project agents, MCP settings, permissions, and skills and therefore requires a separate compatibility decision.
+Repository-owned `.grok/` files remain visible to both builds because they are project configuration committed alongside the code, not installation state. The isolated package does not redirect that namespace. This preserves the project's agents, MCP settings, permissions, hooks, workflows, sandbox settings, and skills.
+
+For a validation run that must not even share repository-local `.grok/` files or source edits with official Grok, use Grok Ultra from a separate Git worktree or clone. Redirecting the project namespace to `.grok-ultra/` inside the client would intentionally make it ignore the repository's existing Grok configuration and is therefore a separate product choice, not an installation fix.
+
+Compatibility reads from user `.claude/` and `.agents/` directories remain enabled because they are cross-tool compatibility inputs rather than official Grok installation state. They are not written by the Grok Ultra installer.
 
 System-managed policy such as `/etc/grok` remains readable. It is not an installation collision surface and may be intentionally enforced by an organization. The isolated package does not write to it.
 
@@ -82,4 +97,4 @@ System-managed policy such as `/etc/grok` remains readable. It is not an install
 .\scripts\install-grok-ultra.ps1
 ```
 
-The installed command is `grok-ultra.cmd`; the core executable is stored as `grok-ultra-core.exe`. Neither file is named `grok.exe`.
+The installed command is `grok-ultra.cmd`; the private core executable is stored as `grok-ultra-core.exe`. The PATH launcher is only a forwarding shim to the private application directory, so moving or replacing it cannot cause the core to resolve relative to the official Grok installation. Neither file is named `grok.exe`.
