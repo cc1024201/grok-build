@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Prefix = if ($env:GROK_ULTRA_PREFIX) { $env:GROK_ULTRA_PREFIX } else { Join-Path $HOME ".local" }
+$DistRoot = if ($env:GROK_ULTRA_DIST_DIR) { $env:GROK_ULTRA_DIST_DIR } else { Join-Path $Root "dist" }
 $AppDir = Join-Path $Prefix "lib\grok-ultra"
 $BinDir = Join-Path $Prefix "bin"
 
@@ -12,7 +13,7 @@ $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitect
     "Arm64" { "aarch64" }
     default { throw "Unsupported architecture" }
 }
-$PackageDir = Join-Path $Root "dist\grok-ultra-windows-$Arch"
+$PackageDir = Join-Path $DistRoot "grok-ultra-windows-$Arch"
 
 Remove-Item $AppDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $AppDir -ItemType Directory -Force | Out-Null
@@ -20,7 +21,15 @@ New-Item $BinDir -ItemType Directory -Force | Out-Null
 Copy-Item (Join-Path $PackageDir "bin") $AppDir -Recurse
 Copy-Item (Join-Path $PackageDir "libexec") $AppDir -Recurse
 Copy-Item (Join-Path $PackageDir "README.txt") $AppDir
-Copy-Item (Join-Path $PackageDir "bin\grok-ultra.cmd") (Join-Path $BinDir "grok-ultra.cmd") -Force
+
+# Keep the real launcher next to its private libexec directory. The PATH entry
+# is only a tiny forwarding shim, so moving it cannot break relative paths.
+$Shim = @"
+@echo off
+call "$AppDir\bin\grok-ultra.cmd" %*
+exit /b %ERRORLEVEL%
+"@
+Set-Content -Path (Join-Path $BinDir "grok-ultra.cmd") -Value $Shim -Encoding Ascii
 
 Write-Host "Installed isolated Grok Ultra:"
 Write-Host "  command: $(Join-Path $BinDir 'grok-ultra.cmd')"
