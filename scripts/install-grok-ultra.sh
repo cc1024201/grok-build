@@ -3,10 +3,15 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 PREFIX=${GROK_ULTRA_PREFIX:-"$HOME/.local"}
+raw_dist_root=${GROK_ULTRA_DIST_DIR:-dist}
+case "$raw_dist_root" in
+  /*) DIST_ROOT=$raw_dist_root ;;
+  *) DIST_ROOT="$ROOT_DIR/$raw_dist_root" ;;
+esac
 APP_DIR="$PREFIX/lib/grok-ultra"
 BIN_DIR="$PREFIX/bin"
 
-"$ROOT_DIR/scripts/build-grok-ultra.sh"
+bash "$ROOT_DIR/scripts/build-grok-ultra.sh"
 
 case "$(uname -s)" in
   Linux) platform=linux ;;
@@ -19,7 +24,7 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 2 ;;
 esac
 
-package_dir="$ROOT_DIR/dist/grok-ultra-${platform}-${arch}"
+package_dir="$DIST_ROOT/grok-ultra-${platform}-${arch}"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR" "$BIN_DIR"
 cp -R "$package_dir/bin" "$package_dir/libexec" "$package_dir/README.txt" "$APP_DIR/"
