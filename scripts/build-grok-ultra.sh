@@ -30,7 +30,8 @@ esac
 
 package_name="grok-ultra-${platform}-${arch}"
 package_dir="$DIST_ROOT/$package_name"
-archive="$DIST_ROOT/$package_name.tar.gz"
+archive_name="$package_name.tar.gz"
+archive="$DIST_ROOT/$archive_name"
 
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p xai-grok-pager-bin --release
 
@@ -148,9 +149,9 @@ EOF_README
 tar -C "$DIST_ROOT" -czf "$archive" "$package_name"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "$archive" > "$archive.sha256"
+  (cd "$DIST_ROOT" && sha256sum "$archive_name") > "$archive.sha256"
 else
-  shasum -a 256 "$archive" > "$archive.sha256"
+  (cd "$DIST_ROOT" && shasum -a 256 "$archive_name") > "$archive.sha256"
 fi
 
 printf 'Package: %s\nArchive: %s\n' "$package_dir" "$archive"
