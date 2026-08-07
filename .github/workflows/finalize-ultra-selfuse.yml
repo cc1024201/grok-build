@@ -27,6 +27,8 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    env:
+      BASELINE_IMAGE_TEST: crates/codegen/xai-grok-shell/src/session/acp_session_tests/tool_layer_images_bridge_tests.rs
     steps:
       - name: Check out implementation branch
         uses: actions/checkout@v4
@@ -52,6 +54,22 @@ jobs:
 
       - name: Apply final effort and model-switch integration
         run: python .github/apply-ultra-effort-final.py
+
+      - name: Apply test-only upstream base64 compatibility shim
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["BASELINE_IMAGE_TEST"])
+          text = path.read_text(encoding="utf-8")
+          marker = "use super::*;\n"
+          insertion = marker + "use base64::Engine as _;\n"
+          if "use base64::Engine" not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("unexpected upstream image-test import layout")
+              path.write_text(text.replace(marker, insertion, 1), encoding="utf-8")
+          PY
 
       - name: Install DotSlash
         run: command -v dotslash >/dev/null || cargo install dotslash --locked
@@ -87,6 +105,7 @@ jobs:
       - name: Publish real source and remove migration helpers
         run: |
           set -euo pipefail
+          git restore --source=HEAD --staged --worktree -- "$BASELINE_IMAGE_TEST"
           rm -f \
             .github/apply-ultra-effort-final.py \
             .github/apply-ultra-phase4.py \
