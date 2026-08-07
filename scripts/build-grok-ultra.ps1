@@ -1,8 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root "target" }
-$DistRoot = if ($env:GROK_ULTRA_DIST_DIR) { $env:GROK_ULTRA_DIST_DIR } else { Join-Path $Root "dist" }
+$RawTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
+$TargetDir = if ([IO.Path]::IsPathRooted($RawTargetDir)) { $RawTargetDir } else { Join-Path $Root $RawTargetDir }
+$RawDistRoot = if ($env:GROK_ULTRA_DIST_DIR) { $env:GROK_ULTRA_DIST_DIR } else { "dist" }
+$DistRoot = if ([IO.Path]::IsPathRooted($RawDistRoot)) { $RawDistRoot } else { Join-Path $Root $RawDistRoot }
 $Arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
     "X64" { "x86_64" }
     "Arm64" { "aarch64" }
@@ -12,14 +14,20 @@ $PackageName = "grok-ultra-windows-$Arch"
 $PackageDir = Join-Path $DistRoot $PackageName
 $Archive = Join-Path $DistRoot "$PackageName.zip"
 
-& cargo build --manifest-path (Join-Path $Root "Cargo.toml") -p xai-grok-pager-bin --release
-if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+Push-Location $Root
+try {
+    & cargo build --manifest-path (Join-Path $Root "Cargo.toml") -p xai-grok-pager-bin --release
+    if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+} finally {
+    Pop-Location
+}
 
 $Core = Join-Path $TargetDir "release\xai-grok-pager.exe"
 if (-not (Test-Path $Core -PathType Leaf)) { throw "Release binary not found: $Core" }
 
 Remove-Item $PackageDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $Archive -Force -ErrorAction SilentlyContinue
+Remove-Item "$Archive.sha256" -Force -ErrorAction SilentlyContinue
 New-Item (Join-Path $PackageDir "bin") -ItemType Directory -Force | Out-Null
 New-Item (Join-Path $PackageDir "libexec") -ItemType Directory -Force | Out-Null
 Copy-Item $Core (Join-Path $PackageDir "libexec\grok-ultra-core.exe")
@@ -27,6 +35,8 @@ Copy-Item $Core (Join-Path $PackageDir "libexec\grok-ultra-core.exe")
 $Launcher = @'
 @echo off
 setlocal
+set "AMBIENT_GROK_HOME=%GROK_HOME%"
+set "AMBIENT_GROK_AUTH_PATH=%GROK_AUTH_PATH%"
 
 if /I "%~1"=="update" (
   echo grok-ultra: self-update is disabled for the isolated self-use build. 1>&2
@@ -43,12 +53,33 @@ if defined GROK_ULTRA_HOME (
   exit /b 2
 )
 
-set "GROK_HOME=%ULTRA_HOME%"
-if defined GROK_ULTRA_AUTH_PATH (
-  set "GROK_AUTH_PATH=%GROK_ULTRA_AUTH_PATH%"
-) else (
-  set "GROK_AUTH_PATH=%ULTRA_HOME%\auth.json"
+if /I "%ULTRA_HOME%"=="%USERPROFILE%\.grok" (
+  echo grok-ultra: refusing to use the official Grok state root: %ULTRA_HOME% 1>&2
+  exit /b 2
 )
+if defined AMBIENT_GROK_HOME if /I "%ULTRA_HOME%"=="%AMBIENT_GROK_HOME%" (
+  echo grok-ultra: isolated state root matches ambient GROK_HOME: %ULTRA_HOME% 1>&2
+  echo Unset GROK_HOME or choose a distinct GROK_ULTRA_HOME. 1>&2
+  exit /b 2
+)
+
+if defined GROK_ULTRA_AUTH_PATH (
+  set "ULTRA_AUTH_PATH=%GROK_ULTRA_AUTH_PATH%"
+) else (
+  set "ULTRA_AUTH_PATH=%ULTRA_HOME%\auth.json"
+)
+if /I "%ULTRA_AUTH_PATH%"=="%USERPROFILE%\.grok\auth.json" (
+  echo grok-ultra: refusing to use the official Grok credential file: %ULTRA_AUTH_PATH% 1>&2
+  exit /b 2
+)
+if defined AMBIENT_GROK_AUTH_PATH if /I "%ULTRA_AUTH_PATH%"=="%AMBIENT_GROK_AUTH_PATH%" (
+  echo grok-ultra: isolated credential path matches ambient GROK_AUTH_PATH: %ULTRA_AUTH_PATH% 1>&2
+  echo Unset GROK_AUTH_PATH or choose a distinct GROK_ULTRA_AUTH_PATH. 1>&2
+  exit /b 2
+)
+
+set "GROK_HOME=%ULTRA_HOME%"
+set "GROK_AUTH_PATH=%ULTRA_AUTH_PATH%"
 if defined GROK_ULTRA_AGENT (
   set "GROK_AGENT=%GROK_ULTRA_AGENT%"
 ) else (
