@@ -149,8 +149,25 @@ jobs:
           New-Item $libexec -ItemType Directory -Force | Out-Null
           Set-Content (Join-Path $bin 'grok-ultra.cmd') $match.Groups[1].Value -Encoding Ascii
           Copy-Item $env:ComSpec (Join-Path $libexec 'grok-ultra-core.exe')
-
           $launcher = Join-Path $bin 'grok-ultra.cmd'
+
+          function Invoke-Launcher([string[]]$LauncherArgs) {
+            $token = [Guid]::NewGuid().ToString('N')
+            $stdoutPath = Join-Path $root "$token.stdout"
+            $stderrPath = Join-Path $root "$token.stderr"
+            $commandLine = '"' + $launcher + '" ' + ($LauncherArgs -join ' ')
+            $process = Start-Process -FilePath $env:ComSpec \
+              -ArgumentList @('/d', '/c', $commandLine) \
+              -Wait -PassThru -NoNewWindow \
+              -RedirectStandardOutput $stdoutPath \
+              -RedirectStandardError $stderrPath
+            [pscustomobject]@{
+              ExitCode = $process.ExitCode
+              Stdout = if (Test-Path $stdoutPath) { Get-Content $stdoutPath -Raw } else { '' }
+              Stderr = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
+            }
+          }
+
           $env:GROK_HOME = 'C:\official-grok'
           $env:GROK_AUTH_PATH = 'C:\official-grok\auth.json'
           $env:GROK_LEADER_SOCKET = 'C:\official-grok\leader.sock'
@@ -158,31 +175,31 @@ jobs:
           Remove-Item Env:GROK_ULTRA_HOME -ErrorAction SilentlyContinue
           Remove-Item Env:GROK_ULTRA_AUTH_PATH -ErrorAction SilentlyContinue
 
-          $output = (& $launcher /c set GROK_) | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "launcher failed: $LASTEXITCODE`n$output" }
+          $normal = Invoke-Launcher @('/c', 'set', 'GROK_')
+          Write-Host $normal.Stdout
+          if ($normal.ExitCode -ne 0) {
+            throw "launcher failed: $($normal.ExitCode)`nstdout:`n$($normal.Stdout)`nstderr:`n$($normal.Stderr)"
+          }
           $expectedHome = Join-Path $env:USERPROFILE '.grok-ultra'
-          if ($output -notmatch [regex]::Escape("GROK_HOME=$expectedHome")) { throw $output }
-          if ($output -notmatch [regex]::Escape("GROK_AUTH_PATH=$expectedHome\auth.json")) { throw $output }
-          if ($output -notmatch 'GROK_AGENT=grok-build-ultra') { throw $output }
-          if ($output -notmatch 'GROK_DISABLE_AUTOUPDATER=1') { throw $output }
-          if ($output -match 'C:\\official-grok\\leader.sock|C:\\official-grok\\session.json') { throw $output }
-
-          $oldPreference = $ErrorActionPreference
-          $oldNativePreference = $PSNativeCommandUseErrorActionPreference
-          try {
-            $ErrorActionPreference = 'Continue'
-            $PSNativeCommandUseErrorActionPreference = $false
-
-            & $launcher update 2>$null
-            $updateCode = $LASTEXITCODE
-
-            $env:GROK_ULTRA_HOME = Join-Path $env:USERPROFILE '.grok'
-            & $launcher /c exit 0 2>$null
-            $officialHomeCode = $LASTEXITCODE
-          } finally {
-            $ErrorActionPreference = $oldPreference
-            $PSNativeCommandUseErrorActionPreference = $oldNativePreference
+          if ($normal.Stdout -notmatch [regex]::Escape("GROK_HOME=$expectedHome")) {
+            throw "isolated home missing:`n$($normal.Stdout)"
+          }
+          if ($normal.Stdout -notmatch [regex]::Escape("GROK_AUTH_PATH=$expectedHome\auth.json")) {
+            throw "isolated auth path missing:`n$($normal.Stdout)"
+          }
+          if ($normal.Stdout -notmatch 'GROK_AGENT=grok-build-ultra') { throw $normal.Stdout }
+          if ($normal.Stdout -notmatch 'GROK_DISABLE_AUTOUPDATER=1') { throw $normal.Stdout }
+          if ($normal.Stdout -match 'C:\\official-grok\\leader.sock|C:\\official-grok\\session.json') {
+            throw "official leader/session leaked:`n$($normal.Stdout)"
           }
 
-          if ($updateCode -ne 2) { throw "update command was not refused: $updateCode" }
-          if ($officialHomeCode -ne 2) { throw "official state root was not refused: $officialHomeCode" }
+          $update = Invoke-Launcher @('update')
+          if ($update.ExitCode -ne 2) {
+            throw "update command was not refused: $($update.ExitCode)`n$($update.Stderr)"
+          }
+
+          $env:GROK_ULTRA_HOME = Join-Path $env:USERPROFILE '.grok'
+          $officialHome = Invoke-Launcher @('/c', 'exit', '0')
+          if ($officialHome.ExitCode -ne 2) {
+            throw "official state root was not refused: $($officialHome.ExitCode)`n$($officialHome.Stderr)"
+          }
