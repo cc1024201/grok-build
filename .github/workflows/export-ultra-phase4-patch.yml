@@ -1,0 +1,51 @@
+name: Export Ultra phase4 patch
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-selfuse
+    paths:
+      - .github/workflows/export-ultra-phase4-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-selfuse
+          fetch-depth: 1
+      - name: Decode phase4 patch
+        run: |
+          python - <<'PY'
+          import ast
+          import base64
+          import hashlib
+          import zlib
+          from pathlib import Path
+
+          source = Path('.github/apply-ultra-phase4.py').read_text()
+          values = {}
+          for node in ast.parse(source).body:
+              if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                  try:
+                      values[node.targets[0].id] = ast.literal_eval(node.value)
+                  except Exception:
+                      pass
+          patch = zlib.decompress(base64.b85decode(values['PAYLOAD'].encode()))
+          actual = hashlib.sha256(patch).hexdigest()
+          if actual != values['EXPECTED_SHA256']:
+              raise SystemExit(f'checksum mismatch: {actual}')
+          Path('ultra-phase4.patch').write_bytes(patch)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-phase4-patch
+          path: ultra-phase4.patch
+          if-no-files-found: error
+          retention-days: 2
