@@ -36,10 +36,20 @@ grep -Fx 'GROK_DISABLE_AUTOUPDATER=1' <<<"$output" >/dev/null
 grep -Fx 'GROK_LEADER_SOCKET=' <<<"$output" >/dev/null
 grep -Fx 'GROK_SESSION_PATH=' <<<"$output" >/dev/null
 
-set +e
-HOME="$TMP/home" "$TMP/package/bin/grok-ultra" update >/dev/null 2>&1
-status=$?
-set -e
-[[ $status -eq 2 ]]
+expect_rejected() {
+  set +e
+  "$@" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ $status -eq 2 ]]
+}
 
-echo "PASS: grok-ultra launcher isolates command state and blocks official updater paths."
+expect_rejected env HOME="$TMP/home" "$TMP/package/bin/grok-ultra" update
+expect_rejected env HOME="$TMP/home" GROK_ULTRA_HOME="$TMP/home/.grok" \
+  "$TMP/package/bin/grok-ultra"
+expect_rejected env HOME="$TMP/home" GROK_HOME=/official/grok \
+  GROK_ULTRA_HOME=/official/grok "$TMP/package/bin/grok-ultra"
+expect_rejected env HOME="$TMP/home" \
+  GROK_ULTRA_AUTH_PATH="$TMP/home/.grok/auth.json" "$TMP/package/bin/grok-ultra"
+
+echo "PASS: grok-ultra launcher isolates command state and rejects official updater/state paths."
