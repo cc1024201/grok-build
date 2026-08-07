@@ -167,9 +167,22 @@ jobs:
           if ($output -notmatch 'GROK_DISABLE_AUTOUPDATER=1') { throw $output }
           if ($output -match 'C:\\official-grok\\leader.sock|C:\\official-grok\\session.json') { throw $output }
 
-          & $launcher update 2>$null
-          if ($LASTEXITCODE -ne 2) { throw "update command was not refused: $LASTEXITCODE" }
+          $oldPreference = $ErrorActionPreference
+          $oldNativePreference = $PSNativeCommandUseErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $PSNativeCommandUseErrorActionPreference = $false
 
-          $env:GROK_ULTRA_HOME = Join-Path $env:USERPROFILE '.grok'
-          & $launcher /c exit 0 2>$null
-          if ($LASTEXITCODE -ne 2) { throw "official state root was not refused: $LASTEXITCODE" }
+            & $launcher update 2>$null
+            $updateCode = $LASTEXITCODE
+
+            $env:GROK_ULTRA_HOME = Join-Path $env:USERPROFILE '.grok'
+            & $launcher /c exit 0 2>$null
+            $officialHomeCode = $LASTEXITCODE
+          } finally {
+            $ErrorActionPreference = $oldPreference
+            $PSNativeCommandUseErrorActionPreference = $oldNativePreference
+          }
+
+          if ($updateCode -ne 2) { throw "update command was not refused: $updateCode" }
+          if ($officialHomeCode -ne 2) { throw "official state root was not refused: $officialHomeCode" }
