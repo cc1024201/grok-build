@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   validate-and-publish:
+    # This workflow exists only long enough to turn the verified migration into
+    # ordinary source on the self-use branch; it removes itself before pushing.
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
