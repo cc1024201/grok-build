@@ -4374,13 +4374,29 @@ impl MvpAgent {
             );
             agent_definition.user_message_template = template;
         }
-        let (session_model_id, sampling_config) = self
+        let (session_model_id, mut sampling_config) = self
             .apply_agent_model_override(
                 pinned_model.as_ref(),
                 session_model_id,
                 sampling_config,
                 origin_client.clone(),
             );
+        if let Some(requested_effort) = agent_definition.effort
+            && let Some(effective_effort) = self
+                .models_manager
+                .resolve_agent_profile_reasoning_effort(
+                    session_model_id.0.as_ref(),
+                    requested_effort,
+                )
+        {
+            sampling_config.reasoning_effort = Some(effective_effort);
+            tracing::info!(
+                agent = %agent_definition.name,
+                model = %session_model_id.0,
+                reasoning_effort = %effective_effort,
+                "agent profile reasoning effort applied to parent session"
+            );
+        }
         let max_turns = {
             let cfg = self.cfg.borrow();
             cfg.cli_agent_overrides

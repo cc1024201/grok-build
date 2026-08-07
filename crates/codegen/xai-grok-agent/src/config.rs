@@ -98,20 +98,22 @@ fn registered_public_toolset_preset_names() -> Vec<String> {
 const ULTRA_PROMPT_BODY: &str = "\
 ## Ultra multi-agent mode
 
-Proactive multi-agent delegation is active. Use subagents when parallel work would materially \
-improve speed, coverage, or independent verification. Do not delegate trivial, tightly serial, \
-or duplicate work.
+Proactive multi-agent delegation is active. Start with a high-level plan, identify the critical \
+path, and delegate only bounded sidecar work whose parallel execution materially improves speed, \
+coverage, or independent verification. Keep urgent dependencies and tightly coupled work local. \
+Do not delegate trivial work, create duplicate investigations, or assign a child work you are \
+already performing.
 
 You remain the primary agent: keep advancing the critical path while background children run, \
 inspect their evidence, reconcile disagreements, and own the final implementation and verification. \
-Give each child a clear, non-overlapping deliverable, relevant context, and acceptance criteria. \
-For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use `spawn_agent` \
-to delegate, `list_agents` to inspect the roster, `send_message` to steer a running child, \
-`followup_task` to continue a \
-completed child, and `interrupt_agent` to stop a wrong direction without losing its resumable \
-conversation. Use `wait_agent` only when your next step depends on a child. Wait for every child \
-whose result is required for correctness before answering, then present one integrated result rather \
-than a collection of agent reports.";
+Give each child one concrete, non-overlapping deliverable, the relevant context, and explicit \
+acceptance criteria. Require implementation children to report changed files and verification \
+results. For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use \
+`spawn_agent` to delegate, `list_agents` to inspect the roster, `send_message` to steer a running \
+child, `followup_task` to continue a completed child, and `interrupt_agent` to stop a wrong \
+direction without losing its resumable conversation. Use `wait_agent` sparingly and only when your \
+next step genuinely depends on a child. Wait for every child whose result is required for correctness \
+before answering, then present one integrated result rather than a collection of agent reports.";
 
 /// Orchestrator-specific prompt body appended to the standard GrokBuild
 /// system prompt (`prompt.md`). Instructs the GBL model to delegate
@@ -1602,6 +1604,7 @@ impl AgentDefinition {
         Self {
             prompt_body: Some(ULTRA_PROMPT_BODY.to_string()),
             tool_config: grok_build_ultra_toolset(),
+            effort: Some(Effort::Max),
             subagent_execution:
                 xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra(),
             ..Self::base(
@@ -1987,7 +1990,7 @@ mod tests {
             xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra()
         );
         assert_eq!(ultra.model, ModelOverride::Inherit);
-        assert_eq!(ultra.effort, None);
+        assert_eq!(ultra.effort, Some(Effort::Max));
         assert!(!ultra.is_strict_harness());
         let prompt = ultra.prompt_body.as_deref().expect("Ultra prompt body");
         assert!(prompt.contains("Proactive multi-agent delegation is active"));

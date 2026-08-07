@@ -11,7 +11,9 @@ use agent_client_protocol as acp;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use indexmap::IndexMap;
 
-use crate::agent::config::{self, ModelEntry, resolve_credentials, sampling_config_for_model};
+use crate::agent::config::{
+    self, Effort, ModelEntry, resolve_credentials, sampling_config_for_model,
+};
 use crate::auth::{AuthManager, GrokAuth, GrokComConfig};
 use crate::remote::{FetchModelsResult, fetch_models_blocking};
 use crate::sampling::SamplerConfig as SamplingConfig;
@@ -499,6 +501,57 @@ impl ModelsManager {
             .get(model_id)
             .map(|e| e.info().reasoning_efforts.clone())
             .unwrap_or_default()
+    }
+
+    /// Resolve a profile-level effort request against the selected model's
+    /// advertised reasoning menu. `Effort::Max` therefore means "the strongest
+    /// value this model actually exposes", rather than blindly emitting `max`.
+    ///
+    /// If a supporting model omits its menu, fall back to its advertised
+    /// default. If neither is available, omit the request instead of sending an
+    /// unverified provider value.
+    pub(crate) fn resolve_agent_profile_reasoning_effort(
+        &self,
+        model_id: &str,
+        requested: Effort,
+    ) -> Option<ReasoningEffort> {
+        if !self.model_supports_reasoning_effort(model_id) {
+            return None;
+        }
+
+        let requested = match requested {
+            Effort::Low => ReasoningEffort::Low,
+            Effort::Medium => ReasoningEffort::Medium,
+            Effort::High => ReasoningEffort::High,
+            Effort::XHigh => ReasoningEffort::Xhigh,
+            Effort::Max => ReasoningEffort::Max,
+        };
+        let rank = |effort: ReasoningEffort| match effort {
+            ReasoningEffort::None => 0,
+            ReasoningEffort::Minimal => 1,
+            ReasoningEffort::Low => 2,
+            ReasoningEffort::Medium => 3,
+            ReasoningEffort::High => 4,
+            ReasoningEffort::Xhigh => 5,
+            ReasoningEffort::Max => 6,
+        };
+        let requested_rank = rank(requested);
+        let options = self.model_reasoning_efforts(model_id);
+        if options.is_empty() {
+            return self.model_default_reasoning_effort(model_id);
+        }
+
+        options
+            .iter()
+            .map(|option| option.value)
+            .filter(|effort| rank(*effort) <= requested_rank)
+            .max_by_key(|effort| rank(*effort))
+            .or_else(|| {
+                options
+                    .iter()
+                    .map(|option| option.value)
+                    .min_by_key(|effort| rank(*effort))
+            })
     }
 
     pub(crate) fn model_supports_backend_search(&self, model_id: &str) -> bool {

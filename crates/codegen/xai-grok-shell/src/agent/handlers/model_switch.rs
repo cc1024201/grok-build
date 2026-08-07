@@ -39,6 +39,12 @@ pub(crate) async fn apply(
         .unwrap_or(&handle.agent_name);
     let required_agent_type =
         resolve_required_agent_type(Some(model.info().agent_type.as_str()), session_default);
+    let active_profile_effort = xai_grok_agent::discovery::by_name_in_cwd_with_plugins(
+        &handle.agent_name,
+        handle.tool_context.cwd.as_path(),
+        agent.plugin_registry_handle.snapshot().as_deref(),
+    )
+    .and_then(|definition| definition.effort);
     let previous_model_id = handle.model_id.0.clone();
     let mut pending_rebuild_definition: Option<xai_grok_agent::AgentDefinition> = None;
     {
@@ -124,6 +130,21 @@ pub(crate) async fn apply(
     }
     let mut model_sampling =
         agent.prepare_sampling_config_for_model(&model, handle.origin_client.clone());
+    if effort_override.is_none()
+        && let Some(requested_effort) = active_profile_effort
+        && let Some(effective_effort) = agent
+            .models_manager
+            .resolve_agent_profile_reasoning_effort(model_id.0.as_ref(), requested_effort)
+    {
+        tracing::info!(
+            session_id = %session_id.0,
+            profile = %handle.agent_name,
+            model_id = %model_id.0,
+            effort = %effective_effort,
+            "set_session_model: preserving agent-profile reasoning effort"
+        );
+        model_sampling.reasoning_effort = Some(effective_effort);
+    }
     if let Some(eff) = effort_override {
         if agent
             .models_manager
