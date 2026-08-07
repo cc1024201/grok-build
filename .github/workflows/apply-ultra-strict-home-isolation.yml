@@ -7,6 +7,12 @@ on:
     paths:
       - .github/apply-ultra-strict-home-isolation.py
       - .github/workflows/apply-ultra-strict-home-isolation.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/apply-ultra-strict-home-isolation.py
+      - .github/workflows/apply-ultra-strict-home-isolation.yml
   workflow_dispatch:
 
 permissions:
