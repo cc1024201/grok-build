@@ -34,7 +34,10 @@ pub mod video_gen;
 pub mod web_fetch;
 pub mod web_search;
 pub mod workflow;
-pub use agent_control::{FollowupTaskTool, InterruptAgentTool, ListAgentsTool, SendMessageTool};
+pub use agent_control::{
+    FollowupTaskTool, InterruptAgentTool, ListAgentsTool, SendMessageTool, SpawnAgentTool,
+    WaitAgentTool,
+};
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
 pub use deploy_app::{AppBuilderDeployerConfig, DEPLOY_APP_TOOL_NAME};

@@ -9,9 +9,13 @@ use crate::implementations::grok_build::task::backend::SubagentBackendResource;
 use crate::implementations::grok_build::task::types::{
     SubagentAgentSummary, SubagentCancelOutcome, SubagentMessageOutcome,
 };
+use crate::implementations::grok_build::task_output::WaitTasksTool;
+use crate::types::output::ToolOutput;
 use crate::types::requirements::{Expr, ToolRequirement};
 use crate::types::tool::{ToolKind, ToolNamespace};
-use xai_tool_types::TaskToolInput;
+use xai_tool_types::{
+    SubagentIsolationMode, TaskToolInput, WaitMode, WaitTasksToolInput, default_subagent_type,
+};
 
 fn task_requirement() -> Expr<ToolRequirement> {
     Expr::Value(ToolRequirement::tool_kind(ToolKind::Task))
@@ -32,6 +36,247 @@ async fn backend_from_context(
                 "SubagentBackendResource (subagent support not initialized)",
             )
         })
+}
+
+fn background_task_requirements() -> Expr<ToolRequirement> {
+    Expr::And(vec![
+        Expr::Value(ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction)),
+        Expr::Value(ToolRequirement::tool_kind(ToolKind::KillTaskAction)),
+    ])
+}
+
+fn valid_task_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// Codex-compatible spawning surface for the Ultra profile.
+///
+/// The stable task name becomes the Grok Build subagent/session id, so later
+/// list/message/follow-up/wait/interrupt calls can use the same identity.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SpawnAgentInput {
+    #[schemars(
+        description = "Task name using lowercase letters, digits, and underscores (max 64 bytes). Must be unique in this parent session."
+    )]
+    pub task_name: String,
+    #[schemars(description = "Complete task message for the new agent.")]
+    pub message: String,
+    #[schemars(description = "Optional subagent role/type. Defaults to general-purpose.")]
+    #[serde(default = "default_subagent_type")]
+    pub agent_type: String,
+    #[schemars(
+        description = "Optional isolated execution mode. Use worktree for potentially overlapping writes."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<SubagentIsolationMode>,
+    #[schemars(description = "Optional model slug. Omit to inherit the parent's Grok model.")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct SpawnAgentTool;
+
+impl crate::types::tool_metadata::ToolMetadata for SpawnAgentTool {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Task
+    }
+
+    fn tool_namespace(&self) -> ToolNamespace {
+        ToolNamespace::GrokBuild
+    }
+
+    fn description_template(&self) -> &str {
+        "Spawn a background subagent for an independent task. The child inherits the Ultra parent context and selected Grok model by default. Returns only after the shared coordinator atomically admits the child. Use a unique lowercase task_name, keep responsibilities non-overlapping, and continue useful parent work while it runs."
+    }
+
+    fn requires_expr(&self) -> Expr<ToolRequirement> {
+        background_task_requirements()
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
+}
+
+impl xai_tool_runtime::Tool for SpawnAgentTool {
+    type Args = SpawnAgentInput;
+    type Output = ToolOutput;
+
+    fn id(&self) -> xai_tool_protocol::ToolId {
+        xai_tool_protocol::ToolId::new("spawn_agent").expect("valid tool id")
+    }
+
+    fn description(
+        &self,
+        _ctx: &xai_tool_runtime::ListToolsContext,
+    ) -> xai_tool_types::ToolDescription {
+        xai_tool_types::ToolDescription::new(
+            "spawn_agent",
+            crate::types::tool_metadata::ToolMetadata::sanitized_description_template(self),
+        )
+    }
+
+    fn capabilities(&self) -> xai_tool_protocol::ToolCapabilities {
+        xai_tool_protocol::ToolCapabilities {
+            is_read_only: false,
+            tool_scope: Some(xai_tool_protocol::ToolScope::Write),
+            ..Default::default()
+        }
+    }
+
+    async fn run(
+        &self,
+        ctx: xai_tool_runtime::ToolCallContext,
+        input: SpawnAgentInput,
+    ) -> Result<ToolOutput, xai_tool_runtime::ToolError> {
+        let task_name = input.task_name.trim().to_string();
+        let message = input.message.trim().to_string();
+        if !valid_task_name(&task_name) {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                "task_name must contain only lowercase letters, digits, and underscores and be at most 64 bytes",
+            ));
+        }
+        if message.is_empty() {
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(
+                "message must be non-empty",
+            ));
+        }
+        let agent_type = if input.agent_type.trim().is_empty() {
+            default_subagent_type()
+        } else {
+            input.agent_type.trim().to_string()
+        };
+        let task_input = TaskToolInput {
+            prompt: message,
+            description: task_name.replace('_', " "),
+            subagent_type: agent_type,
+            run_in_background: true,
+            capability_mode: None,
+            isolation: input.isolation,
+            resume_from: None,
+            cwd: None,
+            model: input.model,
+            task_id: Some(task_name.clone()),
+        };
+        let mut output = xai_tool_runtime::Tool::run(&TaskTool, ctx, task_input).await?;
+        if let ToolOutput::Text(text) = &mut output {
+            text.text = format!("task_name: {task_name}\n{}", text.text);
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct WaitAgentInput {
+    #[schemars(
+        description = "Agent task names to wait for. Omit or pass an empty list to wait for any currently live subagent."
+    )]
+    #[serde(default)]
+    pub targets: Vec<String>,
+    #[schemars(
+        description = "Maximum wait in milliseconds. The host applies its configured upper bound."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Default)]
+pub struct WaitAgentTool;
+
+impl crate::types::tool_metadata::ToolMetadata for WaitAgentTool {
+    fn kind(&self) -> ToolKind {
+        ToolKind::WaitTasksAction
+    }
+
+    fn tool_namespace(&self) -> ToolNamespace {
+        ToolNamespace::GrokBuild
+    }
+
+    fn description_template(&self) -> &str {
+        "Wait until any selected live subagent reaches a terminal state. If targets is empty, the current initializing/running roster is used. Prefer continuing independent parent work; call wait_agent only when further progress depends on a child result."
+    }
+
+    fn requires_expr(&self) -> Expr<ToolRequirement> {
+        Expr::And(vec![
+            task_requirement(),
+            Expr::Value(ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction)),
+        ])
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+}
+
+impl xai_tool_runtime::Tool for WaitAgentTool {
+    type Args = WaitAgentInput;
+    type Output = ToolOutput;
+
+    fn id(&self) -> xai_tool_protocol::ToolId {
+        xai_tool_protocol::ToolId::new("wait_agent").expect("valid tool id")
+    }
+
+    fn description(
+        &self,
+        _ctx: &xai_tool_runtime::ListToolsContext,
+    ) -> xai_tool_types::ToolDescription {
+        xai_tool_types::ToolDescription::new(
+            "wait_agent",
+            crate::types::tool_metadata::ToolMetadata::sanitized_description_template(self),
+        )
+    }
+
+    fn capabilities(&self) -> xai_tool_protocol::ToolCapabilities {
+        xai_tool_protocol::ToolCapabilities {
+            is_read_only: true,
+            tool_scope: Some(xai_tool_protocol::ToolScope::Read),
+            ..Default::default()
+        }
+    }
+
+    async fn run(
+        &self,
+        ctx: xai_tool_runtime::ToolCallContext,
+        input: WaitAgentInput,
+    ) -> Result<ToolOutput, xai_tool_runtime::ToolError> {
+        let targets = if input.targets.is_empty() {
+            let backend = backend_from_context(&ctx).await?;
+            backend
+                .backend()
+                .list_agents()
+                .await
+                .into_iter()
+                .filter(|agent| matches!(agent.status.as_str(), "initializing" | "running"))
+                .map(|agent| agent.subagent_id)
+                .collect::<Vec<_>>()
+        } else {
+            input
+                .targets
+                .into_iter()
+                .map(|target| target.trim().to_string())
+                .filter(|target| !target.is_empty())
+                .collect::<Vec<_>>()
+        };
+        if targets.is_empty() {
+            return Ok(ToolOutput::Text("No live subagents to wait for.".into()));
+        }
+        let output = xai_tool_runtime::Tool::run(
+            &WaitTasksTool,
+            ctx,
+            WaitTasksToolInput {
+                task_ids: targets,
+                mode: WaitMode::WaitAny,
+                timeout_ms: input.timeout_ms,
+            },
+        )
+        .await?;
+        Ok(output.into())
+    }
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -470,11 +715,16 @@ mod tests {
 
     #[test]
     fn control_tools_have_stable_ids() {
+        assert_eq!(Tool::id(&SpawnAgentTool).as_str(), "spawn_agent");
+        assert_eq!(Tool::id(&WaitAgentTool).as_str(), "wait_agent");
         assert_eq!(Tool::id(&ListAgentsTool).as_str(), "list_subagents");
         assert_eq!(Tool::id(&SendMessageTool).as_str(), "send_subagent_message");
         assert_eq!(Tool::id(&FollowupTaskTool).as_str(), "followup_subagent");
         assert_eq!(Tool::id(&InterruptAgentTool).as_str(), "interrupt_subagent");
         assert!(ToolMetadata::description_template(&FollowupTaskTool).contains("resumed"));
+        assert!(valid_task_name("inspect_auth_2"));
+        assert!(!valid_task_name("Inspect Auth"));
+        assert!(!valid_task_name(""));
     }
 }
 
@@ -498,6 +748,18 @@ macro_rules! dynamic_tool_io {
             }
         }
     };
+}
+
+impl From<SpawnAgentInput> for crate::types::tool_io::ToolInput {
+    fn from(value: SpawnAgentInput) -> Self {
+        Self::Dynamic(serde_json::to_value(value).expect("Ultra spawn input must serialize"))
+    }
+}
+
+impl From<WaitAgentInput> for crate::types::tool_io::ToolInput {
+    fn from(value: WaitAgentInput) -> Self {
+        Self::Dynamic(serde_json::to_value(value).expect("Ultra wait input must serialize"))
+    }
 }
 
 dynamic_tool_io!(ListAgentsInput, ListAgentsOutput);

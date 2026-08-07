@@ -105,11 +105,13 @@ or duplicate work.
 You remain the primary agent: keep advancing the critical path while background children run, \
 inspect their evidence, reconcile disagreements, and own the final implementation and verification. \
 Give each child a clear, non-overlapping deliverable, relevant context, and acceptance criteria. \
-For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use `list_agents` \
-to inspect the roster, `send_message` to steer a running child, `followup_task` to continue a \
+For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use `spawn_agent` \
+to delegate, `list_agents` to inspect the roster, `send_message` to steer a running child, \
+`followup_task` to continue a \
 completed child, and `interrupt_agent` to stop a wrong direction without losing its resumable \
-conversation. Wait for every child whose result is required for correctness before answering, then \
-present one integrated result rather than a collection of agent reports.";
+conversation. Use `wait_agent` only when your next step depends on a child. Wait for every child \
+whose result is required for correctness before answering, then present one integrated result rather \
+than a collection of agent reports.";
 
 /// Orchestrator-specific prompt body appended to the standard GrokBuild
 /// system prompt (`prompt.md`). Instructs the GBL model to delegate
@@ -199,6 +201,12 @@ fn followup_task_tool_config() -> ToolConfig {
 fn interrupt_agent_tool_config() -> ToolConfig {
     ToolConfig::from(&grok_build::InterruptAgentTool).with_name("interrupt_agent")
 }
+fn spawn_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::SpawnAgentTool).with_name("spawn_agent")
+}
+fn wait_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::WaitAgentTool).with_name("wait_agent")
+}
 /// Complete workspace-executable toolset for hub registration.
 ///
 /// Extends `default_grok_build_toolset()` with tools that are dynamically
@@ -219,6 +227,8 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
     tools.push((&grok_build::LspTool).into());
+    tools.push(spawn_agent_tool_config());
+    tools.push(wait_agent_tool_config());
     tools.push(list_agents_tool_config());
     tools.push(send_message_tool_config());
     tools.push(followup_task_tool_config());
@@ -323,7 +333,14 @@ fn default_grok_build_toolset() -> ToolServerConfig {
 }
 fn grok_build_ultra_toolset() -> ToolServerConfig {
     let mut config = default_grok_build_toolset();
+    let task_id = ToolConfig::from(&grok_build::TaskTool).id;
+    let wait_id = ToolConfig::from(&grok_build::WaitTasksTool).id;
+    config
+        .tools
+        .retain(|tool| tool.id != task_id && tool.id != wait_id);
     config.tools.extend([
+        spawn_agent_tool_config(),
+        wait_agent_tool_config(),
         list_agents_tool_config(),
         send_message_tool_config(),
         followup_task_tool_config(),
@@ -1912,8 +1929,19 @@ mod tests {
             .map(|tool| tool.id.as_str())
             .collect();
 
-        assert!(normal_tools.iter().all(|id| ultra_tools.contains(id)));
+        let replaced = [
+            ToolConfig::from(&grok_build::TaskTool).id,
+            ToolConfig::from(&grok_build::WaitTasksTool).id,
+        ];
+        assert!(
+            normal_tools
+                .iter()
+                .filter(|id| !replaced.contains(&id.to_string()))
+                .all(|id| ultra_tools.contains(id))
+        );
         for control in [
+            ToolConfig::from(&grok_build::SpawnAgentTool).id,
+            ToolConfig::from(&grok_build::WaitAgentTool).id,
             ToolConfig::from(&grok_build::ListAgentsTool).id,
             ToolConfig::from(&grok_build::SendMessageTool).id,
             ToolConfig::from(&grok_build::FollowupTaskTool).id,
@@ -1928,6 +1956,28 @@ mod tests {
                 "normal Grok Build must not expose Ultra-only `{control}`"
             );
         }
+        let ultra_client_names: std::collections::HashSet<String> = ultra
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.resolve_client_name(tool.id.rsplit(':').next().unwrap_or(&tool.id)))
+            .collect();
+        for expected in [
+            "spawn_agent",
+            "wait_agent",
+            "list_agents",
+            "send_message",
+            "followup_task",
+            "interrupt_agent",
+        ] {
+            assert!(
+                ultra_client_names.contains(expected),
+                "missing `{expected}`"
+            );
+        }
+        assert!(!ultra_client_names.contains("spawn_subagent"));
+        assert!(!ultra_client_names.contains("wait_commands_or_subagents"));
+
         assert_eq!(
             normal.subagent_execution,
             xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::default()

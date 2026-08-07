@@ -695,6 +695,8 @@ impl ToolRegistryBuilder {
         b.register::<grok_build::GetTerminalCommandOutputTool>();
         b.register::<grok_build::WaitTasksTool>();
         b.register::<grok_build::TaskTool>();
+        b.register::<grok_build::SpawnAgentTool>();
+        b.register::<grok_build::WaitAgentTool>();
         b.register::<grok_build::ListAgentsTool>();
         b.register::<grok_build::SendMessageTool>();
         b.register::<grok_build::FollowupTaskTool>();
