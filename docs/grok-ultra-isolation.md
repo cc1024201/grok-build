@@ -72,6 +72,28 @@ The default installation is:
 
 No file named `grok` is created, replaced, or removed. `~/.grok` is not used as the global state root or legacy user-Agent source by the packaged launcher.
 
+## Verify the boundary
+
+The repository ships platform-specific launcher tests:
+
+```bash
+bash scripts/test-grok-ultra-isolation.sh
+```
+
+```powershell
+.\scripts\test-grok-ultra-isolation.ps1
+```
+
+They verify that ambient official-Grok paths are replaced, the updater is refused, and attempts to reuse the official state or credential paths fail closed. The distribution workflow additionally builds the Linux package, launches its real release binary with `--version`, and asserts that an official-state sentinel and `~/.grok` remain untouched.
+
+After a local installation, these checks should show separate commands and separate global roots:
+
+```bash
+command -v grok
+command -v grok-ultra
+printf 'official=%s\nultra=%s\n' "$HOME/.grok" "$HOME/.grok-ultra"
+```
+
 ## Uninstall
 
 ```bash
