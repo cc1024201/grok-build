@@ -1,0 +1,59 @@
+name: Validate Grok Ultra mechanism parity
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-selfuse
+    paths:
+      - .github/apply-ultra-mechanism-parity.py
+      - .github/workflows/validate-ultra-mechanism-parity.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/apply-ultra-mechanism-parity.py
+      - .github/workflows/validate-ultra-mechanism-parity.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-ultra-mechanism-parity
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-selfuse
+          fetch-depth: 1
+      - name: Apply mechanism parity worktree patch
+        run: python .github/apply-ultra-mechanism-parity.py
+      - name: Install DotSlash
+        run: command -v dotslash >/dev/null || cargo install dotslash --locked
+      - name: Format sources
+        run: cargo fmt --all
+      - name: Check focused crates
+        run: |
+          cargo check -p xai-grok-subagent-resolution
+          cargo check -p xai-grok-sampler
+          cargo check -p xai-grok-tools
+          cargo check -p xai-grok-shell
+          cargo check -p xai-grok-pager-bin
+      - name: Run focused Ultra tests
+        run: |
+          cargo test -p xai-grok-tools --lib control_tools_have_stable_ids
+          cargo test -p xai-grok-tools --lib execution_policy_admission_is_atomic_under_concurrent_spawns
+          cargo test -p xai-grok-shell --lib agent_profile_effort_uses_strongest_advertised_level
+      - name: Export formatted patch
+        run: git diff --binary > /tmp/ultra-mechanism-parity-formatted.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultra-mechanism-parity-formatted-patch
+          path: /tmp/ultra-mechanism-parity-formatted.patch
+          if-no-files-found: error
+          retention-days: 1
