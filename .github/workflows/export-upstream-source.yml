@@ -1,0 +1,28 @@
+name: Export upstream review source
+
+on:
+  push:
+    branches:
+      - agent/grok-ultra-upstream-source-export
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/grok-ultra-upstream-source-export
+          fetch-depth: 1
+      - name: Archive source
+        run: tar --exclude=.git --exclude=target --exclude=dist -czf /tmp/grok-build-upstream-afbc.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok-build-upstream-afbc-source
+          path: /tmp/grok-build-upstream-afbc.tar.gz
+          if-no-files-found: error
+          retention-days: 1
