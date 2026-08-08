@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/grok-ultra-upstream-source-export
+  pull_request:
+    branches:
+      - agent/grok-ultra-upstream-review
   workflow_dispatch:
 
 permissions:
