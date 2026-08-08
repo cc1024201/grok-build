@@ -91,6 +91,30 @@ fn registered_public_toolset_preset_names() -> Vec<String> {
         .map(|(name, _)| name.clone())
         .collect()
 }
+/// Ultra keeps the standard Grok Build toolset and primary-agent ownership,
+/// while enabling proactive, bounded delegation through the existing subagent
+/// runtime. This deliberately mirrors Codex Ultra's concise proactive policy
+/// instead of the strict `GrokBuildOrchestrator` delegation contract.
+const ULTRA_PROMPT_BODY: &str = "\
+## Ultra multi-agent mode
+
+Proactive multi-agent delegation is active. Start with a high-level plan, identify the critical \
+path, and delegate only bounded sidecar work whose parallel execution materially improves speed, \
+coverage, or independent verification. Keep urgent dependencies and tightly coupled work local. \
+Do not delegate trivial work, create duplicate investigations, or assign a child work you are \
+already performing.
+
+You remain the primary agent: keep advancing the critical path while background children run, \
+inspect their evidence, reconcile disagreements, and own the final implementation and verification. \
+Give each child one concrete, non-overlapping deliverable, the relevant context, and explicit \
+acceptance criteria. Require implementation children to report changed files and verification \
+results. For concurrent edits, assign disjoint files/modules or use isolated worktrees. Use \
+`spawn_agent` to delegate, `list_agents` to inspect the roster, `send_message` to steer a running \
+child, `followup_task` to continue a completed child, and `interrupt_agent` to stop a wrong \
+direction without losing its resumable conversation. Use `wait_agent` sparingly and only when your \
+next step genuinely depends on a child. Wait for every child whose result is required for correctness \
+before answering, then present one integrated result rather than a collection of agent reports.";
+
 /// Orchestrator-specific prompt body appended to the standard GrokBuild
 /// system prompt (`prompt.md`). Instructs the GBL model to delegate
 /// coding and exploration work to subagents.
@@ -167,6 +191,24 @@ fn wait_tasks_tool_config() -> ToolConfig {
 fn kill_task_tool_config() -> ToolConfig {
     ToolConfig::from(&grok_build::KillTaskTool).with_name("kill_command_or_subagent")
 }
+fn list_agents_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::ListAgentsTool).with_name("list_agents")
+}
+fn send_message_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::SendMessageTool).with_name("send_message")
+}
+fn followup_task_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::FollowupTaskTool).with_name("followup_task")
+}
+fn interrupt_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::InterruptAgentTool).with_name("interrupt_agent")
+}
+fn spawn_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::SpawnAgentTool).with_name("spawn_agent")
+}
+fn wait_agent_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::WaitAgentTool).with_name("wait_agent")
+}
 /// Complete workspace-executable toolset for hub registration.
 ///
 /// Extends `default_grok_build_toolset()` with tools that are dynamically
@@ -187,6 +229,12 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
     tools.push((&grok_build::LspTool).into());
+    tools.push(spawn_agent_tool_config());
+    tools.push(wait_agent_tool_config());
+    tools.push(list_agents_tool_config());
+    tools.push(send_message_tool_config());
+    tools.push(followup_task_tool_config());
+    tools.push(interrupt_agent_tool_config());
     ToolServerConfig {
         tools,
         behavior_preset: None,
@@ -284,6 +332,23 @@ fn default_grok_build_toolset() -> ToolServerConfig {
         ],
         behavior_preset: None,
     }
+}
+fn grok_build_ultra_toolset() -> ToolServerConfig {
+    let mut config = default_grok_build_toolset();
+    let task_id = ToolConfig::from(&grok_build::TaskTool).id;
+    let wait_id = ToolConfig::from(&grok_build::WaitTasksTool).id;
+    config
+        .tools
+        .retain(|tool| tool.id != task_id && tool.id != wait_id);
+    config.tools.extend([
+        spawn_agent_tool_config(),
+        wait_agent_tool_config(),
+        list_agents_tool_config(),
+        send_message_tool_config(),
+        followup_task_tool_config(),
+        interrupt_agent_tool_config(),
+    ]);
+    config
 }
 fn grok_build_concise_toolset() -> ToolServerConfig {
     ToolServerConfig {
@@ -682,6 +747,7 @@ where
 #[strum(serialize_all = "kebab-case")]
 pub enum BuiltinAgentName {
     GrokBuild,
+    GrokBuildUltra,
     GrokBuildConcise,
     GrokBuildPlan,
     GrokBuildPlanNoSubagents,
@@ -711,6 +777,7 @@ impl BuiltinAgentName {
     pub fn definition(self) -> AgentDefinition {
         match self {
             Self::GrokBuild => AgentDefinition::default_grok_build(),
+            Self::GrokBuildUltra => AgentDefinition::grok_build_ultra(),
             Self::GrokBuildConcise => AgentDefinition::grok_build_concise(),
             Self::GrokBuildPlan => AgentDefinition::grok_build_plan(),
             Self::GrokBuildPlanNoSubagents => AgentDefinition::grok_build_plan_no_subagents(),
@@ -787,6 +854,12 @@ pub struct AgentDefinition {
     pub disallowed_tools: Vec<String>,
     #[serde(default)]
     pub effort: Option<Effort>,
+    /// Session-level subagent execution policy. Defaults preserve the normal
+    /// Grok Build behavior; `grok-build-ultra` opts into bounded proactive
+    /// orchestration without changing the model-provider wire protocol.
+    #[serde(default)]
+    pub subagent_execution:
+        xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy,
     #[serde(default, deserialize_with = "deserialize_nonzero_u32")]
     pub max_turns: Option<u32>,
     #[serde(default)]
@@ -1496,6 +1569,7 @@ impl AgentDefinition {
             disallowed_tools: vec![],
             tools: vec![],
             effort: None,
+            subagent_execution: Default::default(),
             max_turns: None,
             isolation: None,
             background: None,
@@ -1523,6 +1597,21 @@ impl AgentDefinition {
             BuiltinAgentName::GrokBuild,
             "Grok Build agent for software engineering tasks.",
         )
+    }
+    /// Grok Build Ultra: the normal full-capability primary agent plus
+    /// proactive, context-aware, bounded multi-agent orchestration.
+    pub fn grok_build_ultra() -> Self {
+        Self {
+            prompt_body: Some(ULTRA_PROMPT_BODY.to_string()),
+            tool_config: grok_build_ultra_toolset(),
+            effort: Some(Effort::Max),
+            subagent_execution:
+                xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra(),
+            ..Self::base(
+                BuiltinAgentName::GrokBuildUltra,
+                "Grok Build with proactive bounded multi-agent orchestration.",
+            )
+        }
     }
     /// Grok Build Concise agent definition — concise output format for SFT/RL.
     pub fn grok_build_concise() -> Self {
@@ -1826,12 +1915,96 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn grok_build_ultra_is_a_full_tool_execution_profile() {
+        let normal = AgentDefinition::default_grok_build();
+        let ultra = AgentDefinition::grok_build_ultra();
+        let normal_tools: Vec<&str> = normal
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.id.as_str())
+            .collect();
+        let ultra_tools: Vec<&str> = ultra
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.id.as_str())
+            .collect();
+
+        let replaced = [
+            ToolConfig::from(&grok_build::TaskTool).id,
+            ToolConfig::from(&grok_build::WaitTasksTool).id,
+        ];
+        assert!(
+            normal_tools
+                .iter()
+                .filter(|id| !replaced.contains(&id.to_string()))
+                .all(|id| ultra_tools.contains(id))
+        );
+        for control in [
+            ToolConfig::from(&grok_build::SpawnAgentTool).id,
+            ToolConfig::from(&grok_build::WaitAgentTool).id,
+            ToolConfig::from(&grok_build::ListAgentsTool).id,
+            ToolConfig::from(&grok_build::SendMessageTool).id,
+            ToolConfig::from(&grok_build::FollowupTaskTool).id,
+            ToolConfig::from(&grok_build::InterruptAgentTool).id,
+        ] {
+            assert!(
+                ultra_tools.contains(&control.as_str()),
+                "Ultra toolset must include `{control}`"
+            );
+            assert!(
+                !normal_tools.contains(&control.as_str()),
+                "normal Grok Build must not expose Ultra-only `{control}`"
+            );
+        }
+        let ultra_client_names: std::collections::HashSet<String> = ultra
+            .tool_config
+            .tools
+            .iter()
+            .map(|tool| tool.resolve_client_name(tool.id.rsplit(':').next().unwrap_or(&tool.id)))
+            .collect();
+        for expected in [
+            "spawn_agent",
+            "wait_agent",
+            "list_agents",
+            "send_message",
+            "followup_task",
+            "interrupt_agent",
+        ] {
+            assert!(
+                ultra_client_names.contains(expected),
+                "missing `{expected}`"
+            );
+        }
+        assert!(!ultra_client_names.contains("spawn_subagent"));
+        assert!(!ultra_client_names.contains("wait_commands_or_subagents"));
+
+        assert_eq!(
+            normal.subagent_execution,
+            xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::default()
+        );
+        assert_eq!(
+            ultra.subagent_execution,
+            xai_grok_tools::implementations::grok_build::task::types::SubagentExecutionPolicy::ultra()
+        );
+        assert_eq!(ultra.model, ModelOverride::Inherit);
+        assert_eq!(ultra.effort, Some(Effort::Max));
+        assert!(!ultra.is_strict_harness());
+        let prompt = ultra.prompt_body.as_deref().expect("Ultra prompt body");
+        assert!(prompt.contains("Proactive multi-agent delegation is active"));
+        assert!(prompt.contains("keep advancing the critical path"));
+        assert!(prompt.contains("own the final implementation and verification"));
+    }
+
     /// Exhaustive match → adding a new `BuiltinAgentName` won't compile
     /// until classified.
     fn expected_strict_harness(name: BuiltinAgentName) -> bool {
         match name {
             BuiltinAgentName::Codex | BuiltinAgentName::GrokBuildOrchestrator => true,
             BuiltinAgentName::GrokBuild
+            | BuiltinAgentName::GrokBuildUltra
             | BuiltinAgentName::GrokBuildConcise
             | BuiltinAgentName::GrokBuildPlan
             | BuiltinAgentName::GrokBuildPlanNoSubagents
@@ -2516,6 +2689,7 @@ description: Test default tool config
         use std::str::FromStr;
         for (s, expected) in [
             ("grok-build", BuiltinAgentName::GrokBuild),
+            ("grok-build-ultra", BuiltinAgentName::GrokBuildUltra),
             ("grok-build-concise", BuiltinAgentName::GrokBuildConcise),
             ("grok-build-ask-user", BuiltinAgentName::GrokBuildAskUser),
             ("codex", BuiltinAgentName::Codex),

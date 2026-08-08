@@ -1950,3 +1950,86 @@ async fn identity_switch_clears_user_pick_latch() {
         "a new identity's first catalog must reselect the default after clear()",
     );
 }
+
+#[test]
+fn agent_profile_effort_uses_strongest_advertised_level() {
+    let mut cfg = config::Config::default();
+    cfg.config_models.insert(
+        "profile-model".to_string(),
+        config::ConfigModelOverride {
+            reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    id: "low".to_string(),
+                    value: ReasoningEffort::Low,
+                    label: "Low".to_string(),
+                    description: None,
+                    default: false,
+                },
+                ReasoningEffortOption {
+                    id: "high".to_string(),
+                    value: ReasoningEffort::High,
+                    label: "High".to_string(),
+                    description: None,
+                    default: true,
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    let catalog = resolve_model_catalog(&cfg, None);
+    let tmp = std::env::temp_dir().join("grok-test-profile-effort-menu");
+    let auth_manager = Arc::new(AuthManager::new(&tmp, GrokComConfig::default()));
+    let mgr = ModelsManager::new(
+        None,
+        catalog,
+        acp::ModelId::new("profile-model"),
+        auth_manager,
+        cfg,
+    );
+
+    assert_eq!(
+        mgr.resolve_agent_profile_reasoning_effort("profile-model", Effort::Max),
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(
+        mgr.resolve_agent_profile_reasoning_effort("profile-model", Effort::Medium),
+        Some(ReasoningEffort::Low)
+    );
+}
+
+#[test]
+fn agent_profile_effort_uses_catalog_default_when_menu_is_missing() {
+    let mut info = config::ModelInfo::fallback("default-only");
+    info.supports_reasoning_effort = true;
+    info.reasoning_effort = Some(ReasoningEffort::High);
+    info.reasoning_efforts.clear();
+    let mut models = IndexMap::new();
+    models.insert(
+        "default-only".to_string(),
+        ModelEntry {
+            info,
+            api_key: None,
+            env_key: None,
+            auth_provider: None,
+            api_base_url: None,
+        },
+    );
+    let tmp = std::env::temp_dir().join("grok-test-profile-effort-default");
+    let auth_manager = Arc::new(AuthManager::new(&tmp, GrokComConfig::default()));
+    let mgr = ModelsManager::new(
+        None,
+        models,
+        acp::ModelId::new("default-only"),
+        auth_manager,
+        config::Config::default(),
+    );
+
+    assert_eq!(
+        mgr.resolve_agent_profile_reasoning_effort("default-only", Effort::Max),
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(
+        mgr.resolve_agent_profile_reasoning_effort("missing", Effort::Max),
+        None
+    );
+}

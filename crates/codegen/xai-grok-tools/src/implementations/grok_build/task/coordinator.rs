@@ -25,10 +25,11 @@ use super::coordinator_state::{
     completion_summary, sleep_until, workflow_outstanding,
 };
 use super::types::{
-    SpawnedSubagentRef, SubagentCancelOutcome, SubagentCancelTarget, SubagentDescribeOutcome,
-    SubagentEvent, SubagentOutstandingReply, SubagentOwner, SubagentRegistryCounts,
+    SpawnedSubagentRef, SubagentAdmission, SubagentAdmissionOutcome, SubagentAgentSummary,
+    SubagentCancelOutcome, SubagentCancelTarget, SubagentDescribeOutcome, SubagentEvent,
+    SubagentMessageOutcome, SubagentOutstandingReply, SubagentOwner, SubagentRegistryCounts,
     SubagentRequest, SubagentResult, SubagentResumeLookup, SubagentResumeSource,
-    SubagentValidateTypeOutcome,
+    SubagentSpawnRequest, SubagentValidateTypeOutcome,
 };
 
 pub use super::coordinator_state::{
@@ -79,6 +80,17 @@ impl PromptScope {
             prompt_id,
         }
     }
+}
+
+fn reject_spawn(
+    result_tx: oneshot::Sender<SubagentResult>,
+    admission_tx: Option<oneshot::Sender<SubagentAdmissionOutcome>>,
+    result: SubagentResult,
+) {
+    if let Some(admission_tx) = admission_tx {
+        let _ = admission_tx.send(SubagentAdmissionOutcome::Rejected(result.clone()));
+    }
+    let _ = result_tx.send(result);
 }
 
 impl<R: ChildRunner> SubagentCoordinator<R> {
@@ -168,7 +180,12 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
     fn handle_command(&mut self, command: SubagentEvent) {
         match command {
             SubagentEvent::Spawn(command) => {
-                let mut request = *command.request;
+                let SubagentSpawnRequest {
+                    request,
+                    result_tx,
+                    admission_tx,
+                } = command;
+                let mut request = *request;
                 if let Some((root_parent, loop_task_id, spawner_cancelled, spawner_owner)) = self
                     .active
                     .values()
@@ -186,14 +203,18 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         // The parent subagent is being torn down, so its late
                         // child would be orphaned against the closed scope.
                         let id = request.id.clone();
-                        let _ = command.result_tx.send(SubagentResult {
-                            success: false,
-                            cancelled: true,
-                            error: Some("parent subagent is being torn down".to_owned()),
-                            subagent_id: id.clone(),
-                            child_session_id: id,
-                            ..Default::default()
-                        });
+                        reject_spawn(
+                            result_tx,
+                            admission_tx,
+                            SubagentResult {
+                                success: false,
+                                cancelled: true,
+                                error: Some("parent subagent is being torn down".to_owned()),
+                                subagent_id: id.clone(),
+                                child_session_id: id,
+                                ..Default::default()
+                            },
+                        );
                         return;
                     }
                     request.parent_session_id = root_parent;
@@ -216,28 +237,66 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         .contains(&request.parent_session_id)
                 {
                     let id = request.id.clone();
-                    let _ = command.result_tx.send(SubagentResult {
-                        success: false,
-                        cancelled: true,
-                        error: Some("parent session is stopped".to_owned()),
-                        subagent_id: id.clone(),
-                        child_session_id: id,
-                        ..Default::default()
-                    });
+                    reject_spawn(
+                        result_tx,
+                        admission_tx,
+                        SubagentResult {
+                            success: false,
+                            cancelled: true,
+                            error: Some("parent session is stopped".to_owned()),
+                            subagent_id: id.clone(),
+                            child_session_id: id,
+                            ..Default::default()
+                        },
+                    );
                     return;
                 }
                 let id = request.id.clone();
+                if !request.owner.is_workflow()
+                    && let Some(limit) = request.execution_policy.max_active_subagents
+                {
+                    let running = self
+                        .pending
+                        .values()
+                        .map(|child| &child.request)
+                        .chain(self.active.values().map(|child| &child.request))
+                        .filter(|child| {
+                            !child.owner.is_workflow()
+                                && child.parent_session_id == request.parent_session_id
+                        })
+                        .count();
+                    if running >= limit {
+                        reject_spawn(
+                            result_tx,
+                            admission_tx,
+                            SubagentResult {
+                                success: false,
+                                error: Some(format!(
+                                    "Subagent concurrency limit reached: at most {limit} active subagents are allowed for this session"
+                                )),
+                                subagent_id: id.clone(),
+                                child_session_id: id,
+                                ..Default::default()
+                            },
+                        );
+                        return;
+                    }
+                }
                 if self.pending.contains_key(&id)
                     || self.active.contains_key(&id)
                     || self.completed.contains_key(&id)
                 {
-                    let _ = command.result_tx.send(SubagentResult {
-                        success: false,
-                        error: Some(format!("Subagent id '{id}' already exists")),
-                        subagent_id: id.clone(),
-                        child_session_id: id,
-                        ..Default::default()
-                    });
+                    reject_spawn(
+                        result_tx,
+                        admission_tx,
+                        SubagentResult {
+                            success: false,
+                            error: Some(format!("Subagent id '{id}' already exists")),
+                            subagent_id: id.clone(),
+                            child_session_id: id,
+                            ..Default::default()
+                        },
+                    );
                     return;
                 }
                 let cancellation = request.cancel_token.clone();
@@ -251,12 +310,19 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         request: request.clone(),
                         started_at: std::time::Instant::now(),
                         cancellation: cancellation.clone(),
-                        spawn_reply: Some(command.result_tx),
+                        spawn_reply: Some(result_tx),
                         foreground_deadline,
                         handle_only,
                         explicitly_killed: false,
                     },
                 );
+                if let Some(admission_tx) = admission_tx {
+                    let _ =
+                        admission_tx.send(SubagentAdmissionOutcome::Admitted(SubagentAdmission {
+                            subagent_id: id.clone(),
+                            child_session_id: id.clone(),
+                        }));
+                }
                 self.running_count_changed();
                 let reporter = ChildReporter {
                     subagent_id: id.clone(),
@@ -322,6 +388,87 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             }
             SubagentEvent::ListRunning(request) => {
                 self.handle_list_running(request.parent_session_id, request.respond_to);
+            }
+            SubagentEvent::ListAgents(request) => {
+                let mut agents: Vec<_> = self
+                    .pending
+                    .values()
+                    .filter(|child| {
+                        child.request.parent_session_id == request.parent_session_id
+                            && !child.request.owner.is_workflow()
+                    })
+                    .map(|child| SubagentAgentSummary {
+                        subagent_id: child.request.id.clone(),
+                        subagent_type: child.request.subagent_type.clone(),
+                        description: child.request.description.clone(),
+                        status: "initializing".to_string(),
+                        duration_ms: child.started_at.elapsed().as_millis() as u64,
+                        resumed_from: child.request.resume_from.clone(),
+                    })
+                    .chain(
+                        self.active
+                            .values()
+                            .filter(|child| {
+                                child.request.parent_session_id == request.parent_session_id
+                                    && !child.request.owner.is_workflow()
+                            })
+                            .map(|child| SubagentAgentSummary {
+                                subagent_id: child.request.id.clone(),
+                                subagent_type: child.request.subagent_type.clone(),
+                                description: child.request.description.clone(),
+                                status: "running".to_string(),
+                                duration_ms: child.started_at.elapsed().as_millis() as u64,
+                                resumed_from: child.resumed_from.clone(),
+                            }),
+                    )
+                    .chain(
+                        self.completed
+                            .values()
+                            .filter(|child| {
+                                child.request.parent_session_id == request.parent_session_id
+                                    && !child.request.owner.is_workflow()
+                            })
+                            .map(|child| SubagentAgentSummary {
+                                subagent_id: child.request.id.clone(),
+                                subagent_type: child.request.subagent_type.clone(),
+                                description: child.request.description.clone(),
+                                status: child.result.status().to_string(),
+                                duration_ms: child.result.duration_ms,
+                                resumed_from: child.resumed_from.clone(),
+                            }),
+                    )
+                    .collect();
+                agents.sort_by(|left, right| left.subagent_id.cmp(&right.subagent_id));
+                let _ = request.respond_to.send(agents);
+            }
+            SubagentEvent::Message(request) => {
+                let outcome = if let Some(child) = self.active.get(&request.subagent_id)
+                    && child.request.parent_session_id == request.parent_session_id
+                    && !child.request.owner.is_workflow()
+                {
+                    if child.control.send_message(request.message) {
+                        SubagentMessageOutcome::Delivered
+                    } else {
+                        SubagentMessageOutcome::Unavailable
+                    }
+                } else if self.pending.get(&request.subagent_id).is_some_and(|child| {
+                    child.request.parent_session_id == request.parent_session_id
+                        && !child.request.owner.is_workflow()
+                }) {
+                    SubagentMessageOutcome::Initializing
+                } else if self
+                    .completed
+                    .get(&request.subagent_id)
+                    .is_some_and(|child| {
+                        child.request.parent_session_id == request.parent_session_id
+                            && !child.request.owner.is_workflow()
+                    })
+                {
+                    SubagentMessageOutcome::Completed
+                } else {
+                    SubagentMessageOutcome::NotFound
+                };
+                let _ = request.respond_to.send(outcome);
             }
             SubagentEvent::Completions(request) => {
                 let (owned, foreign): (Vec<_>, Vec<_>) =

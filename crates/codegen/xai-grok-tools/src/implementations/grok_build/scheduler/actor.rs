@@ -674,6 +674,7 @@ impl SchedulerActor {
             surface_completion: true,
             await_to_completion: false,
             fork_context: false,
+            execution_policy: Default::default(),
             owner: SubagentOwner::Task,
             cancel_token: CancellationToken::new(),
         };
@@ -683,6 +684,7 @@ impl SchedulerActor {
             .send(SubagentEvent::Spawn(SubagentSpawnRequest {
                 request: Box::new(request),
                 result_tx,
+                admission_tx: None,
             }))
             .is_err()
         {

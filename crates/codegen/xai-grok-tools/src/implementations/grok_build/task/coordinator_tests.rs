@@ -2,9 +2,9 @@ use super::*;
 use crate::implementations::grok_build::task::backend::{ChannelBackend, SubagentBackend};
 use crate::implementations::grok_build::task::types::{
     SubagentCancelRequest, SubagentClearUsageNotAppliedRequest, SubagentCompletionsRequest,
-    SubagentListActiveRequest, SubagentLoopUnitActiveRequest, SubagentMarkUsageNotAppliedRequest,
-    SubagentOutstandingReply, SubagentOutstandingRequest, SubagentOwner, SubagentRegistryCounts,
-    SubagentRequest, SubagentSnapshotStatus,
+    SubagentExecutionPolicy, SubagentListActiveRequest, SubagentLoopUnitActiveRequest,
+    SubagentMarkUsageNotAppliedRequest, SubagentOutstandingReply, SubagentOutstandingRequest,
+    SubagentOwner, SubagentRegistryCounts, SubagentRequest, SubagentSnapshotStatus,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -175,6 +175,7 @@ fn request(id: &str, background: bool) -> SubagentRequest {
         surface_completion: true,
         await_to_completion: false,
         fork_context: false,
+        execution_policy: Default::default(),
         owner: SubagentOwner::Task,
         cancel_token: CancellationToken::new(),
     }
@@ -1595,5 +1596,40 @@ async fn completed_cache_evicts_oldest_entry_at_cap() {
             .await
             .is_some()
     );
+    harness.actor.abort();
+}
+
+#[tokio::test]
+async fn execution_policy_admission_is_atomic_under_concurrent_spawns() {
+    let harness = harness(true, std::time::Duration::from_secs(60));
+    let mut spawns = Vec::new();
+    for index in 0..16 {
+        let backend = harness.backend.clone();
+        let mut child = request(&format!("ultra-{index}"), true);
+        child.execution_policy = SubagentExecutionPolicy::ultra();
+        spawns.push(tokio::spawn(async move {
+            backend.spawn_background(child).await
+        }));
+    }
+
+    let mut admitted = 0;
+    let mut rejected = 0;
+    for spawn in spawns {
+        match spawn.await.expect("spawn task should not panic") {
+            Ok(_) => admitted += 1,
+            Err(error) => {
+                rejected += 1;
+                assert!(
+                    error.to_string().contains("concurrency limit reached"),
+                    "unexpected rejection: {error}"
+                );
+            }
+        }
+    }
+
+    assert_eq!(admitted, 3);
+    assert_eq!(rejected, 13);
+    let counts = harness.backend.registry_counts().await;
+    assert_eq!(counts.pending + counts.active, 3);
     harness.actor.abort();
 }
